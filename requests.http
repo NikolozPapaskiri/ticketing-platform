@@ -61,3 +61,39 @@ X-Tenant-Id: {{tenantA}}
 ### 11. Cross-tenant check: read tenant A's event while sending tenant B's header -> 404 (filtered out)
 GET {{host}}/api/events/{{eventA}}
 X-Tenant-Id: {{tenantB}}
+
+### 12. Publish event A (Draft -> OnSale) -> 204
+POST {{host}}/api/events/{{eventA}}/publish
+X-Tenant-Id: {{tenantA}}
+
+### 13. Publish again (OnSale -> OnSale is illegal) -> 409 Conflict
+POST {{host}}/api/events/{{eventA}}/publish
+X-Tenant-Id: {{tenantA}}
+
+### 14. Close event A (OnSale -> Closed) -> 204
+POST {{host}}/api/events/{{eventA}}/close
+X-Tenant-Id: {{tenantA}}
+
+### 15. Publish the closed event (Closed is terminal) -> 409 Conflict
+POST {{host}}/api/events/{{eventA}}/publish
+X-Tenant-Id: {{tenantA}}
+
+### 16. Cross-tenant: publish A's event as tenant B -> 404 (filtered, NOT 409)
+POST {{host}}/api/events/{{eventA}}/publish
+X-Tenant-Id: {{tenantB}}
+
+### 17. Paged + filtered browse -> envelope, only OnSale
+GET {{host}}/api/events?page=1&pageSize=1&status=OnSale
+X-Tenant-Id: {{tenantA}}
+
+### 18. Clamp check: pageSize over max comes back as 100 in the envelope
+GET {{host}}/api/events?pageSize=1000000
+X-Tenant-Id: {{tenantA}}
+
+### 19. Invalid page -> 400
+GET {{host}}/api/events?page=0
+X-Tenant-Id: {{tenantA}}
+
+### 20. Invalid status enum -> 400 (automatic bind failure)
+GET {{host}}/api/events?status=Banana
+X-Tenant-Id: {{tenantA}}

@@ -74,9 +74,9 @@ public class EventsController : ControllerBase
             .Select(r => new EventListItemResponse(r.Id, r.Name, r.VenueName, r.StartsAt, r.Status.ToString()))
             .ToList();
 
-        var totalpages = (int)Math.Ceiling(totalCount / (double)pageSize);
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
 
-        return Ok(new PagedResponse<EventListItemResponse>(items, page, pageSize, totalCount, totalpages));
+        return Ok(new PagedResponse<EventListItemResponse>(items, page, pageSize, totalCount, totalPages));
     }
 
     [HttpGet("{id:guid}")]
