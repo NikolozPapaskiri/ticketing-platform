@@ -1,8 +1,9 @@
 using FluentValidation;
 using TicketingPlatform.Api.Contracts;
 
-public sealed class CreateTenantRequestValidator : AbstractValidator<CreateTenantRequest>
+namespace TicketingPlatform.Api.Validation;
 
+public sealed class CreateTenantRequestValidator : AbstractValidator<CreateTenantRequest>
 {
     public CreateTenantRequestValidator()
     {

@@ -1,6 +1,6 @@
 using TicketingPlatform.Api.Domain;
 
-namespace TicketingPlatform.UnitTests;
+namespace TicketingPlatform.UnitTests.Domain;
 
 public class EventStateMachineTests
 {

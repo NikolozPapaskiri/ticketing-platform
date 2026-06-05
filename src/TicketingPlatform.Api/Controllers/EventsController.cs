@@ -30,7 +30,6 @@ public class EventsController : ControllerBase
         _logger = logger;
         _eventValidator = eventValidator;
         _ticketTypeValidator = ticketTypeValidator;
-
     }
 
     [HttpGet]
