@@ -383,14 +383,52 @@ This is a phase highlight and one of the most interviewed senior topics.
 
 ---
 
+# ENVIRONMENT AND HOW TO RUN (current, verified — read before running anything)
+
+This is the real setup, including things learned the hard way. It is not the same as the idealized Phase 0 text above.
+
+## Toolchain
+- **.NET 10 SDK (10.0.300)** required. Pinned by `global.json` at the repo root (`rollForward: latestFeature`). Multiple SDKs (9.x and 10.x) are installed; the pin forces 10.0.300.
+- **IDE: Visual Studio 2026 (18.x)** for build / F5 / debugging / the `.http` runner / Test Explorer. **Visual Studio 2022 CANNOT build this project.** The .NET 10 SDK requires MSBuild 18; VS 2022 is permanently on MSBuild 17, so it fails with `NETSDK1045` ("requires at least version 18.0.0 of MSBuild"). The `dotnet` CLI builds fine regardless, because it uses the SDK's own bundled MSBuild 18 independent of any installed VS.
+- **`dotnet-ef` global tool must be v10**: `dotnet tool update --global dotnet-ef --version 10.0.0` (a v9 tool mismatches the EF Core 10 packages).
+
+## Database
+- PostgreSQL 17 in Docker via `docker compose up -d`.
+- **Host port is 5433, not 5432.** A native PostgreSQL service already owns 5432 on the dev machine and silently intercepts connections (causes `28P01 password authentication failed`). The compose mapping is `5433:5432` and `appsettings.json` uses `Port=5433`. The container-internal port is still 5432.
+- Local-dev credentials: user/password/db all `ticketing`.
+- **Migrations are applied manually** with `dotnet ef database update` (Program.cs does NOT auto-migrate at startup).
+
+## Run
+```bash
+docker compose up -d
+dotnet build TicketingPlatform.sln -c Release                      # or build/F5 in VS 2026
+dotnet ef database update --project src/TicketingPlatform.Api      # apply migrations
+dotnet run --project src/TicketingPlatform.Api                     # http://localhost:5000
+dotnet test                                                        # once a test project exists
+```
+- API listens on `http://localhost:5000` (launchSettings). `GET /` returns 404 by design (Web API, no home page). OpenAPI spec at `/openapi/v1.json` in Development; there is no Swagger UI. Verify endpoints via `requests.http`.
+- **One instance on port 5000 at a time.** A second `dotnet run` / F5 fails with an address-in-use error; and building while the app runs fails with `MSB3027` because Windows locks the output `.exe`. Stop the app before you build.
+
+## Hard-won gotchas
+- "Build succeeded" is not "works": the state-machine bug compiled cleanly and would have shipped. Lean on tests.
+- Remote: GitHub `NikolozPapaskiri/ticketing-platform`. Conventional Commits; milestone tags (`v1-naive` is pushed).
+
+---
+
 # STATUS (update this as we go)
 
-- **Done:** Phase 1 scaffold authored (naive single-project ASP.NET Core 10 + EF Core 10 + PostgreSQL API; multi-tenancy via EF Core global query filter; entities Tenant/Event/TicketType/Inventory; tenant-resolution middleware reading `X-Tenant-Id`; correlation-id middleware; minimal RFC 7807 exception handler; tenant and event controllers; `requests.http` walkthrough). Not yet compiled or run.
-- **Immediate next actions (start here):**
-  1. `docker compose up -d`, then `dotnet restore`, `dotnet ef migrations add InitialCreate --project src/TicketingPlatform.Api`, `dotnet ef database update --project src/TicketingPlatform.Api`, `dotnet run --project src/TicketingPlatform.Api`. Fix any build or restore errors (the package versions are pinned at 10.0.0; if one fails, `dotnet add package` to resolve the latest compatible).
-  2. Run `requests.http` top to bottom and confirm tenant isolation, especially the step where tenant B gets 404 on tenant A's event.
-  3. Finish Phase 1 Week 3: guarded `Event` status transitions (Draft → OnSale → Closed) returning 409/422, pagination/filtering on event browse, confirm the error contract. Tag `v1-naive`.
-- **Then:** Phase 2 (FluentValidation, API versioning, xUnit unit tests, the Clean Architecture refactor, Testcontainers integration tests, the `Hold` concept).
+- **Done — Phase 1, tagged `v1-naive` (pushed):** naive single-project ASP.NET Core 10 + EF Core 10 + PostgreSQL API, compiling and running on .NET 10.
+  - Multi-tenancy via EF Core global query filter, verified end to end (tenant B gets 404 on tenant A's event; missing `X-Tenant-Id` → 400).
+  - Entities Tenant/Event/TicketType/Inventory; `InitialCreate` migration in source control; `Inventory` uses the Postgres `xmin` shadow property as an optimistic-concurrency token (Npgsql 10 removed `UseXminAsConcurrencyToken()`).
+  - Guarded Event state machine on the entity (`CanTransitionTo` / `TransitionTo`, explicit transition table Draft → OnSale → Closed, Closed terminal). `POST /api/events/{id}/publish` and `/close` return **409 ProblemDetails** on illegal moves; the entity throws `InvalidStatusTransitionException` as a backstop.
+  - Paged + filtered browse on `GET /api/events` (`page`/`pageSize`/`status`, page validated, pageSize clamped 1–100, stable `OrderBy(StartsAt).ThenBy(Id)`, count-then-page).
+  - Uniform RFC 7807 error contract (every error carries `type` + `traceId` via the `Problem()` helper). Correlation-id middleware.
+- **Now — Phase 2 (Weeks 4–5), in progress:**
+  1. **(current)** Stand up `tests/TicketingPlatform.UnitTests` (xUnit 2.9.3) and unit-test the Event state machine: full transition matrix via `[Theory]`/`[InlineData]` for `CanTransitionTo`, plus `TransitionTo` sets status on legal moves and throws on illegal.
+  2. FluentValidation for non-trivial rules (event start in the future, price > 0, capacity > 0, valid currency); keep trivial required/length checks as data annotations.
+  3. API versioning (`Asp.Versioning`).
+  4. Refactor to Clean Architecture (Domain / Application / Infrastructure / Api); move the state machine and rules out of the Api project.
+  5. Integration tests with `WebApplicationFactory` + Testcontainers against real Postgres (create event → add ticket type → browse → get, and tenant isolation). Introduce the `Hold` concept with single-threaded reservation logic (concurrency is Phase 5).
 - **Open option:** the project can be swapped to a ride-hailing/dispatch domain (geospatial + matching algorithm); the phases and skills are identical. Not currently chosen.
 
-When you finish a phase, move its items into "Done" and update "Immediate next actions".
+When you finish a phase, move its items into "Done" and update the "Now" list.
