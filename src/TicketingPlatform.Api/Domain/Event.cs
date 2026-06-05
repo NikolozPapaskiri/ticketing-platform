@@ -22,19 +22,19 @@ public class Event
     // ...CreatedAt, TicketTypes unchanged...
 
     // The single reviewable "what's allowed" table.
-    private static readonly Dictionary<EventStatus, EventStatus[]> AllowedTransactions = new()
+    private static readonly Dictionary<EventStatus, EventStatus[]> AllowedTransitions = new()
     {
         [EventStatus.Draft] = new[] { EventStatus.OnSale, EventStatus.Closed },
         [EventStatus.OnSale] = new[] { EventStatus.Closed },
         [EventStatus.Closed] = Array.Empty<EventStatus>(), //Terminal
     };
 
-    public bool CantransitionTo(EventStatus target) =>
-        AllowedTransactions.TryGetValue(target, out var targets) && targets.Contains(target);
+    public bool CanTransitionTo(EventStatus target) =>
+        AllowedTransitions.TryGetValue(Status, out var alowed) && alowed.Contains(target);
 
     public void TransitionTo(EventStatus target)
     {
-        if (!CantransitionTo(target))
+        if (!CanTransitionTo(target))
         {
             throw new InvalidOperationException($"Cannot transition from {Status} to {target}");   // defense-in-depth backstop
         }

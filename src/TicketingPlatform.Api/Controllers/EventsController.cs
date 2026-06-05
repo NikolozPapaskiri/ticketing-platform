@@ -196,7 +196,7 @@ public class EventsController : ControllerBase
         if(ev is null)
             return NotFound();
 
-        if(!ev.CantransitionTo(target))
+        if(!ev.CanTransitionTo(target))
             return Conflict(new ProblemDetails
             {
                 Status = StatusCodes.Status409Conflict,
