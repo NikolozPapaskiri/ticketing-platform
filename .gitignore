@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+out/
+[Dd]ebug/
+[Rr]elease/
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+*.DotSettings.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+*.env
+appsettings.*.local.json
