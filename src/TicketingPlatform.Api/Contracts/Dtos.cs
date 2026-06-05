@@ -25,3 +25,10 @@ public record TicketTypeResponse(
     string Currency,
     int TotalQuantity,
     int AvailableQuantity);
+
+public record PagedResponse<T>(
+    IReadOnlyList<T> Items,
+    int PageNumber,
+    int PageSize,
+    int TotalItems,
+    int TotalPages);

@@ -28,26 +28,55 @@ public class EventsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<EventListItemResponse>>> List(CancellationToken ct)
+    public async Task<ActionResult<PagedResponse<EventListItemResponse>>> List(
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 20,
+    [FromQuery] EventStatus? status = null,
+    CancellationToken ct = default)
     {
         if (!_tenant.HasTenant)
-        {
             return MissingTenant();
-        }
 
-        // Project the enum itself in SQL, then format it in memory. Calling Status.ToString()
-        // inside the server-side projection is not reliably translatable to SQL.
-        var rows = await _db.Events
-            .AsNoTracking()
+        // page: reject bad values (400). pageSize: clamp silently. Both are senior guardrails —
+        // without the clamp, ?pageSize=1000000 pulls the whole table again.
+        if(page < 1)
+            return Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid page number",
+                detail: "Page number must more or equel to 1.");
+
+        pageSize = Math.Clamp(pageSize, 1, 100);
+
+        // Composable IQueryable: nothing executes yet. The tenant query filter is already baked in.
+        var query = _db.Events.AsNoTracking();
+
+        // Conditional chaining — the .Where only joins the expression tree when a filter is present.
+        // e.Status == enum DOES translate to SQL because of HasConversion<string>() in the DbContext.
+        if(status is not null)
+            query = query.Where(e => e.Status == status);
+
+        // Query 1: count of the *filtered* set (must come after the Where, before Skip/Take).
+        var totalCount = await query.CountAsync(ct);
+
+        // Query 2: the page itself. Stable order needs the Id tiebreaker — offset paging over a
+        // non-unique key (StartsAt) is non-deterministic; two events at the same time could swap pages.
+        var rows = await query
             .OrderBy(e => e.StartsAt)
+            .ThenBy(e => e.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(e => new { e.Id, e.Name, e.VenueName, e.StartsAt, e.Status })
             .ToListAsync(ct);
 
-        var events = rows
+        // Map in memory — Status.ToString() is not reliably translatable inside the SQL projection,
+        // which is why the Select above projects the enum and we format it here.
+        var items = rows
             .Select(r => new EventListItemResponse(r.Id, r.Name, r.VenueName, r.StartsAt, r.Status.ToString()))
             .ToList();
 
-        return Ok(events);
+        var totalpages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        return Ok(new PagedResponse<EventListItemResponse>(items, page, pageSize, totalCount, totalpages));
     }
 
     [HttpGet("{id:guid}")]
