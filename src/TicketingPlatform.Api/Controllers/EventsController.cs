@@ -1,3 +1,4 @@
+using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Api.Contracts;
@@ -19,12 +20,17 @@ public class EventsController : ControllerBase
     private readonly TicketingDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly ILogger<EventsController> _logger;
+    private readonly IValidator<CreateEventRequest> _eventValidator;
+    private readonly IValidator<CreateTicketTypeRequest> _ticketTypeValidator;
 
-    public EventsController(TicketingDbContext db, ITenantContext tenant, ILogger<EventsController> logger)
+    public EventsController(TicketingDbContext db, ITenantContext tenant, ILogger<EventsController> logger, IValidator<CreateEventRequest> eventValidator, IValidator<CreateTicketTypeRequest> ticketTypeValidator)
     {
         _db = db;
         _tenant = tenant;
         _logger = logger;
+        _eventValidator = eventValidator;
+        _ticketTypeValidator = ticketTypeValidator;
+
     }
 
     [HttpGet]
@@ -128,6 +134,14 @@ public class EventsController : ControllerBase
             return MissingTenant();
         }
 
+        var validation = await _eventValidator.ValidateAsync(request, ct);
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors)
+                ModelState.AddModelError(error.PropertyName, error.ErrorMessage);
+            return ValidationProblem(ModelState);
+        }
+
         var ev = new Event
         {
             Id = Guid.NewGuid(),
@@ -159,6 +173,14 @@ public class EventsController : ControllerBase
         if (!_tenant.HasTenant)
         {
             return MissingTenant();
+        }
+
+        var validation = await _ticketTypeValidator.ValidateAsync(request, ct);
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors)
+                ModelState.AddModelError(error.PropertyName, error.ErrorMessage);
+            return ValidationProblem(ModelState);
         }
 
         // The query is tenant-scoped, so an event from another tenant is invisible and returns 404.
