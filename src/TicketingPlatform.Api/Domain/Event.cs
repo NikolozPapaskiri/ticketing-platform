@@ -18,8 +18,7 @@ public class Event
 
     public ICollection<TicketType> TicketTypes { get; set; } = new List<TicketType>();
 
-    public EventStatus Status { get; private set; } = EventStatus.Draft;   // <-- private set + default
-    // ...CreatedAt, TicketTypes unchanged...
+    public EventStatus Status { get; private set; } = EventStatus.Draft;
 
     // The single reviewable "what's allowed" table.
     private static readonly Dictionary<EventStatus, EventStatus[]> AllowedTransitions = new()
@@ -30,13 +29,15 @@ public class Event
     };
 
     public bool CanTransitionTo(EventStatus target) =>
-        AllowedTransitions.TryGetValue(Status, out var alowed) && alowed.Contains(target);
+        AllowedTransitions.TryGetValue(Status, out var allowed) && allowed.Contains(target);
 
     public void TransitionTo(EventStatus target)
     {
+        // Defense-in-depth backstop. Callers should pre-check CanTransitionTo and return a clean 409;
+        // this throw protects state integrity if some future path forgets to.
         if (!CanTransitionTo(target))
         {
-            throw new InvalidOperationException($"Cannot transition from {Status} to {target}");   // defense-in-depth backstop
+            throw new InvalidStatusTransitionException(Status, target);
         }
         Status = target;
     }

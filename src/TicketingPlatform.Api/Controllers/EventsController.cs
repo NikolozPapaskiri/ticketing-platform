@@ -43,7 +43,7 @@ public class EventsController : ControllerBase
             return Problem(
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Invalid page number",
-                detail: "Page number must more or equel to 1.");
+                detail: "Page number must be greater than or equal to 1.");
 
         pageSize = Math.Clamp(pageSize, 1, 100);
 
@@ -226,12 +226,12 @@ public class EventsController : ControllerBase
             return NotFound();
 
         if(!ev.CanTransitionTo(target))
-            return Conflict(new ProblemDetails
-            {
-                Status = StatusCodes.Status409Conflict,
-                Title = "Illegal status transition",
-                Detail = $"An event in '{ev.Status}' cannot move to '{target}'."
-            });
+            // Use the Problem() helper (not Conflict(new ProblemDetails{...})) so the body runs through
+            // the ProblemDetailsFactory and carries the same type + traceId as every other error here.
+            return Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Illegal status transition",
+                detail: $"An event in '{ev.Status}' cannot move to '{target}'.");
 
         ev.TransitionTo(target);              // safe: pre-checked, won't throw
         await _db.SaveChangesAsync(ct);
