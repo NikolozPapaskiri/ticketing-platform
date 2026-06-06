@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Api.Contracts;
 using TicketingPlatform.Api.Data;
 using TicketingPlatform.Api.Domain;
-using FluentValidation;
 
 namespace TicketingPlatform.Api.Controllers;
 
@@ -16,13 +15,8 @@ namespace TicketingPlatform.Api.Controllers;
 public class TenantsController : ControllerBase
 {
     private readonly TicketingDbContext _db;
-    private readonly IValidator<CreateTenantRequest> _validator;
 
-    public TenantsController(TicketingDbContext db, IValidator<CreateTenantRequest> validator)
-    {
-        _db = db;
-        _validator = validator;
-    }
+    public TenantsController(TicketingDbContext db) => _db = db;
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<TenantResponse>>> List(CancellationToken ct)
@@ -39,14 +33,6 @@ public class TenantsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<TenantResponse>> Create(CreateTenantRequest request, CancellationToken ct)
     {
-        var validation = await _validator.ValidateAsync(request, ct);
-        if (!validation.IsValid)
-        {
-            foreach (var error in validation.Errors)
-                ModelState.AddModelError(error.PropertyName, error.ErrorMessage);
-            return ValidationProblem(ModelState);
-        }
-
         var slugTaken = await _db.Tenants.AnyAsync(t => t.Slug == request.Slug, ct);
         if (slugTaken)
         {

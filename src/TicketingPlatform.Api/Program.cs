@@ -4,10 +4,14 @@ using TicketingPlatform.Api.Common;
 using TicketingPlatform.Api.Data;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Api.Validation;
+using TicketingPlatform.Api.Common;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<FluentValidationFilter>();
+});
 builder.Services.AddOpenApi();
 
 // RFC 7807 ProblemDetails + a global exception handler.
