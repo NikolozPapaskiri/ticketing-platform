@@ -1,3 +1,4 @@
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Api.Contracts;
@@ -11,7 +12,8 @@ namespace TicketingPlatform.Api.Controllers;
 /// without an X-Tenant-Id header. In Phase 3 they are restricted to the platform-admin role.
 /// </summary>
 [ApiController]
-[Route("api/tenants")]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/tenants")]
 public class TenantsController : ControllerBase
 {
     private readonly TicketingDbContext _db;

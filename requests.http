@@ -1,99 +1,99 @@
-@host = http://localhost:5000
+@host = http://localhost:5000/api/v1
 
 ### 1. Create tenant A (Aurora Live). Copy the returned "id" into @tenantA below.
-POST {{host}}/api/tenants
+POST {{host}}/tenants
 Content-Type: application/json
 
 { "name": "Aurora Live", "slug": "aurora-live" }
 
 ### 2. Create tenant B (Vortex Events). Copy the returned "id" into @tenantB below.
-POST {{host}}/api/tenants
+POST {{host}}/tenants
 Content-Type: application/json
 
 { "name": "Vortex Events", "slug": "vortex-events" }
 
 ### 3. List all tenants (admin view, no tenant header required)
-GET {{host}}/api/tenants
+GET {{host}}/tenants
 
 ### ---- paste the two ids from steps 1 and 2 ----
 @tenantA = 22672e8b-86fb-4837-9572-af59f1b9ae45
 @tenantB = 022c8a1c-ca0f-4c6c-9ee4-4751c1c215dd
 
 ### 4. Create an event under tenant A. Copy the returned "id" into @eventA below.
-POST {{host}}/api/events
+POST {{host}}/events
 Content-Type: application/json
 X-Tenant-Id: {{tenantA}}
 
 { "name": "Aurora Summer Fest", "description": "Open air festival", "venueName": "Riverside Park", "startsAt": "2026-07-01T20:00:00Z" }
 
 ### 5. Create an event under tenant B
-POST {{host}}/api/events
+POST {{host}}/events
 Content-Type: application/json
 X-Tenant-Id: {{tenantB}}
 
 { "name": "Vortex Night", "venueName": "Hall 9", "startsAt": "2026-08-15T21:00:00Z" }
 
 ### 6. List events as tenant A -> only Aurora's event (the global query filter at work)
-GET {{host}}/api/events
+GET {{host}}/events
 X-Tenant-Id: {{tenantA}}
 
 ### 7. List events as tenant B -> only Vortex's event
-GET {{host}}/api/events
+GET {{host}}/events
 X-Tenant-Id: {{tenantB}}
 
 ### 8. List events with NO tenant header -> 400 (tenant required)
-GET {{host}}/api/events
+GET {{host}}/events
 
 ### ---- paste the event id from step 4 ----
 @eventA = 497bb046-bf73-44ed-a5af-916c83d49c1f
 
 ### 9. Add a ticket type + inventory to tenant A's event
-POST {{host}}/api/events/{{eventA}}/ticket-types
+POST {{host}}/events/{{eventA}}/ticket-types
 Content-Type: application/json
 X-Tenant-Id: {{tenantA}}
 
 { "name": "General Admission", "price": 49.90, "currency": "EUR", "totalQuantity": 500 }
 
 ### 10. Get the full event (with ticket types) as tenant A
-GET {{host}}/api/events/{{eventA}}
+GET {{host}}/events/{{eventA}}
 X-Tenant-Id: {{tenantA}}
 
 ### 11. Cross-tenant check: read tenant A's event while sending tenant B's header -> 404 (filtered out)
-GET {{host}}/api/events/{{eventA}}
+GET {{host}}/events/{{eventA}}
 X-Tenant-Id: {{tenantB}}
 
 ### 12. Publish event A (Draft -> OnSale) -> 204
-POST {{host}}/api/events/{{eventA}}/publish
+POST {{host}}/events/{{eventA}}/publish
 X-Tenant-Id: {{tenantA}}
 
 ### 13. Publish again (OnSale -> OnSale is illegal) -> 409 Conflict
-POST {{host}}/api/events/{{eventA}}/publish
+POST {{host}}/events/{{eventA}}/publish
 X-Tenant-Id: {{tenantA}}
 
 ### 14. Close event A (OnSale -> Closed) -> 204
-POST {{host}}/api/events/{{eventA}}/close
+POST {{host}}/events/{{eventA}}/close
 X-Tenant-Id: {{tenantA}}
 
 ### 15. Publish the closed event (Closed is terminal) -> 409 Conflict
-POST {{host}}/api/events/{{eventA}}/publish
+POST {{host}}/events/{{eventA}}/publish
 X-Tenant-Id: {{tenantA}}
 
 ### 16. Cross-tenant: publish A's event as tenant B -> 404 (filtered, NOT 409)
-POST {{host}}/api/events/{{eventA}}/publish
+POST {{host}}/events/{{eventA}}/publish
 X-Tenant-Id: {{tenantB}}
 
 ### 17. Paged + filtered browse -> envelope, only OnSale
-GET {{host}}/api/events?page=1&pageSize=1&status=OnSale
+GET {{host}}/events?page=1&pageSize=1&status=OnSale
 X-Tenant-Id: {{tenantA}}
 
 ### 18. Clamp check: pageSize over max comes back as 100 in the envelope
-GET {{host}}/api/events?pageSize=1000000
+GET {{host}}/events?pageSize=1000000
 X-Tenant-Id: {{tenantA}}
 
 ### 19. Invalid page -> 400
-GET {{host}}/api/events?page=0
+GET {{host}}/events?page=0
 X-Tenant-Id: {{tenantA}}
 
 ### 20. Invalid status enum -> 400 (automatic bind failure)
-GET {{host}}/api/events?status=Banana
+GET {{host}}/events?status=Banana
 X-Tenant-Id: {{tenantA}}

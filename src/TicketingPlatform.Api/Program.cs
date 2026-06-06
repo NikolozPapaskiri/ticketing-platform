@@ -4,7 +4,7 @@ using TicketingPlatform.Api.Common;
 using TicketingPlatform.Api.Data;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Api.Validation;
-using TicketingPlatform.Api.Common;
+using Asp.Versioning;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +13,19 @@ builder.Services.AddControllers(options =>
     options.Filters.Add<FluentValidationFilter>();
 });
 builder.Services.AddOpenApi();
+
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;   // no version specified => treat as v1.0
+    options.ReportApiVersions = true;                     // adds 'api-supported-versions' response header
+})
+.AddMvc()                                                  // controller integration (Asp.Versioning.Mvc)
+.AddApiExplorer(options =>
+{
+    options.GroupNameFormat = "'v'VVV";                    // formats group as v1, v2, ...
+    options.SubstituteApiVersionInUrl = true;              // fills {version:apiVersion} in generated URLs
+});
 
 // RFC 7807 ProblemDetails + a global exception handler.
 builder.Services.AddProblemDetails();

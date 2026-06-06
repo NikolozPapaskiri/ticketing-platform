@@ -1,3 +1,4 @@
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Api.Contracts;
@@ -13,7 +14,8 @@ namespace TicketingPlatform.Api.Controllers;
 /// "WHERE TenantId = ..." anywhere in this controller. That is the filter doing its job.
 /// </summary>
 [ApiController]
-[Route("api/events")]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/events")]
 public class EventsController : ControllerBase
 {
     private readonly TicketingDbContext _db;
