@@ -21,4 +21,9 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\TicketingPlatform.Application\TicketingPlatform.Application.csproj" />
+    <ProjectReference Include="..\TicketingPlatform.Infrastructure\TicketingPlatform.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>
