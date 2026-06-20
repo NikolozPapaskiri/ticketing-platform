@@ -1,4 +1,4 @@
-namespace TicketingPlatform.Api.Domain;
+namespace TicketingPlatform.Domain;
 
 /// <summary>
 /// An event organizer. This is the tenant boundary. Tenant itself is not tenant-scoped:

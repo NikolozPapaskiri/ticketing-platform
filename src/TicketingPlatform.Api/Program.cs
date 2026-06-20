@@ -1,9 +1,9 @@
 using FluentValidation;
-using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Api.Common;
-using TicketingPlatform.Api.Data;
 using TicketingPlatform.Api.Tenancy;
-using TicketingPlatform.Api.Validation;
+using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Validation;
+using TicketingPlatform.Infrastructure;
 using Asp.Versioning;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -40,8 +40,7 @@ builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantCon
 builder.Services.AddValidatorsFromAssemblyContaining<CreateEventRequestValidator>();
 builder.Services.AddSingleton(TimeProvider.System); // real clock in prod; tests pass
 
-builder.Services.AddDbContext<TicketingDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("Default")!);
 
 var app = builder.Build();
 

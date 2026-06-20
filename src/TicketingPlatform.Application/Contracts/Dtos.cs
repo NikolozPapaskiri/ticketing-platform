@@ -1,4 +1,4 @@
-namespace TicketingPlatform.Api.Contracts;
+namespace TicketingPlatform.Application.Contracts;
 
 // Tenant
 public record CreateTenantRequest(string Name, string Slug);

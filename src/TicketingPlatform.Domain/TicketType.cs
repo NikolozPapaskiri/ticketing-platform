@@ -1,4 +1,4 @@
-namespace TicketingPlatform.Api.Domain;
+namespace TicketingPlatform.Domain;
 
 /// <summary>
 /// A category of ticket for an event, for example General Admission or VIP. Each ticket type

@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using TicketingPlatform.Api.Domain;
-using TicketingPlatform.Api.Tenancy;
+using TicketingPlatform.Domain;
+using TicketingPlatform.Application.Abstractions;
 
-namespace TicketingPlatform.Api.Data;
+namespace TicketingPlatform.Infrastructure.Persistence;
 
 public class TicketingDbContext : DbContext
 {

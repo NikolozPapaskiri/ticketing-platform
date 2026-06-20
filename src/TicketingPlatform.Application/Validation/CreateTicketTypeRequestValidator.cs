@@ -1,7 +1,7 @@
 using FluentValidation;
-using TicketingPlatform.Api.Contracts;
+using TicketingPlatform.Application.Contracts;
 
-namespace TicketingPlatform.Api.Validation;
+namespace TicketingPlatform.Application.Validation;
 
 public sealed class CreateTicketTypeRequestValidator : AbstractValidator<CreateTicketTypeRequest>
 {

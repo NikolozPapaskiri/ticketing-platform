@@ -1,4 +1,4 @@
-namespace TicketingPlatform.Api.Domain;
+namespace TicketingPlatform.Domain;
 
 public class InvalidStatusTransitionException : Exception
 {

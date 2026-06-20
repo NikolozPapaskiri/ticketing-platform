@@ -1,6 +1,6 @@
 using FluentValidation.TestHelper;
-using TicketingPlatform.Api.Contracts;
-using TicketingPlatform.Api.Validation;
+using TicketingPlatform.Application.Contracts;
+using TicketingPlatform.Application.Validation;
 
 namespace TicketingPlatform.UnitTests.Validation;
 

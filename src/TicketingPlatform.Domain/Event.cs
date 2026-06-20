@@ -1,4 +1,4 @@
-namespace TicketingPlatform.Api.Domain;
+namespace TicketingPlatform.Domain;
 
 /// <summary>
 /// An event put on sale by a tenant. Tenant-scoped: TenantId plus a global query filter

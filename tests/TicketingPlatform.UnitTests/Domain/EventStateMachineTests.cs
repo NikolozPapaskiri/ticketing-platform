@@ -1,4 +1,4 @@
-using TicketingPlatform.Api.Domain;
+using TicketingPlatform.Domain;
 
 namespace TicketingPlatform.UnitTests.Domain;
 

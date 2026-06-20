@@ -1,10 +1,11 @@
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using TicketingPlatform.Api.Contracts;
-using TicketingPlatform.Api.Data;
-using TicketingPlatform.Api.Domain;
+using TicketingPlatform.Application.Contracts;
+using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Domain;
 using TicketingPlatform.Api.Tenancy;
+using TicketingPlatform.Application.Abstractions;
 
 namespace TicketingPlatform.Api.Controllers;
 
@@ -39,7 +40,7 @@ public class EventsController : ControllerBase
         if (!_tenant.HasTenant)
             return MissingTenant();
 
-        // page: reject bad values (400). pageSize: clamp silently. Both are senior guardrails —
+        // page: reject bad values (400). pageSize: clamp silently. Both are senior guardrails â€”
         // without the clamp, ?pageSize=1000000 pulls the whole table again.
         if(page < 1)
             return Problem(
@@ -52,7 +53,7 @@ public class EventsController : ControllerBase
         // Composable IQueryable: nothing executes yet. The tenant query filter is already baked in.
         var query = _db.Events.AsNoTracking();
 
-        // Conditional chaining — the .Where only joins the expression tree when a filter is present.
+        // Conditional chaining â€” the .Where only joins the expression tree when a filter is present.
         // e.Status == enum DOES translate to SQL because of HasConversion<string>() in the DbContext.
         if(status is not null)
             query = query.Where(e => e.Status == status);
@@ -60,7 +61,7 @@ public class EventsController : ControllerBase
         // Query 1: count of the *filtered* set (must come after the Where, before Skip/Take).
         var totalCount = await query.CountAsync(ct);
 
-        // Query 2: the page itself. Stable order needs the Id tiebreaker — offset paging over a
+        // Query 2: the page itself. Stable order needs the Id tiebreaker â€” offset paging over a
         // non-unique key (StartsAt) is non-deterministic; two events at the same time could swap pages.
         var rows = await query
             .OrderBy(e => e.StartsAt)
@@ -70,7 +71,7 @@ public class EventsController : ControllerBase
             .Select(e => new { e.Id, e.Name, e.VenueName, e.StartsAt, e.Status })
             .ToListAsync(ct);
 
-        // Map in memory — Status.ToString() is not reliably translatable inside the SQL projection,
+        // Map in memory â€” Status.ToString() is not reliably translatable inside the SQL projection,
         // which is why the Select above projects the enum and we format it here.
         var items = rows
             .Select(r => new EventListItemResponse(r.Id, r.Name, r.VenueName, r.StartsAt, r.Status.ToString()))

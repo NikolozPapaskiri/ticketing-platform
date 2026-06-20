@@ -1,18 +1,10 @@
+using TicketingPlatform.Application.Abstractions;
+
 namespace TicketingPlatform.Api.Tenancy;
 
 /// <summary>
-/// Read-only view of the current tenant for a request. The DbContext depends on this to apply
-/// its global query filter. Keeping the read contract separate from the setter means the rest
-/// of the app cannot accidentally change the tenant mid-request.
-/// </summary>
-public interface ITenantContext
-{
-    Guid? TenantId { get; }
-    bool HasTenant { get; }
-}
-
-/// <summary>
-/// Scoped (one per request). Populated by TenantResolutionMiddleware.
+/// Scoped (one per request). Populated by TenantResolutionMiddleware. Implements the
+/// Application-layer ITenantContext port; the DbContext reads it through that interface.
 /// </summary>
 public sealed class TenantContext : ITenantContext
 {

@@ -1,9 +1,9 @@
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using TicketingPlatform.Api.Contracts;
-using TicketingPlatform.Api.Data;
-using TicketingPlatform.Api.Domain;
+using TicketingPlatform.Application.Contracts;
+using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Domain;
 
 namespace TicketingPlatform.Api.Controllers;
 

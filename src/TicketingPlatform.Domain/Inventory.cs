@@ -1,4 +1,4 @@
-namespace TicketingPlatform.Api.Domain;
+namespace TicketingPlatform.Domain;
 
 /// <summary>
 /// Available stock for a ticket type. AvailableQuantity is the contested resource that Phase 5
