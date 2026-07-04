@@ -402,9 +402,13 @@ This is the real setup, including things learned the hard way. It is not the sam
 ```bash
 docker compose up -d
 dotnet build TicketingPlatform.sln -c Release                      # or build/F5 in VS 2026
-dotnet ef database update --project src/TicketingPlatform.Api      # apply migrations
-dotnet run --project src/TicketingPlatform.Api                     # http://localhost:5000
-dotnet test                                                        # once a test project exists
+# EF is cross-project since the Clean Architecture refactor: migrations live in Infrastructure,
+# the startup project is Api. Both flags are required for every dotnet ef command:
+dotnet ef database update --project src/TicketingPlatform.Infrastructure --startup-project src/TicketingPlatform.Api
+# new migration:
+dotnet ef migrations add <Name> --project src/TicketingPlatform.Infrastructure --startup-project src/TicketingPlatform.Api
+dotnet run --project src/TicketingPlatform.Api                     # http://localhost:5000, routes under /api/v1
+dotnet test                                                        # 41 unit tests (domain + validators)
 ```
 - API listens on `http://localhost:5000` (launchSettings). `GET /` returns 404 by design (Web API, no home page). OpenAPI spec at `/openapi/v1.json` in Development; there is no Swagger UI. Verify endpoints via `requests.http`.
 - **One instance on port 5000 at a time.** A second `dotnet run` / F5 fails with an address-in-use error; and building while the app runs fails with `MSB3027` because Windows locks the output `.exe`. Stop the app before you build.
@@ -423,12 +427,17 @@ dotnet test                                                        # once a test
   - Guarded Event state machine on the entity (`CanTransitionTo` / `TransitionTo`, explicit transition table Draft → OnSale → Closed, Closed terminal). `POST /api/events/{id}/publish` and `/close` return **409 ProblemDetails** on illegal moves; the entity throws `InvalidStatusTransitionException` as a backstop.
   - Paged + filtered browse on `GET /api/events` (`page`/`pageSize`/`status`, page validated, pageSize clamped 1–100, stable `OrderBy(StartsAt).ThenBy(Id)`, count-then-page).
   - Uniform RFC 7807 error contract (every error carries `type` + `traceId` via the `Problem()` helper). Correlation-id middleware.
-- **Now — Phase 2 (Weeks 4–5), in progress:**
-  1. **(current)** Stand up `tests/TicketingPlatform.UnitTests` (xUnit 2.9.3) and unit-test the Event state machine: full transition matrix via `[Theory]`/`[InlineData]` for `CanTransitionTo`, plus `TransitionTo` sets status on legal moves and throws on illegal.
-  2. FluentValidation for non-trivial rules (event start in the future, price > 0, capacity > 0, valid currency); keep trivial required/length checks as data annotations.
-  3. API versioning (`Asp.Versioning`).
-  4. Refactor to Clean Architecture (Domain / Application / Infrastructure / Api); move the state machine and rules out of the Api project.
-  5. Integration tests with `WebApplicationFactory` + Testcontainers against real Postgres (create event → add ticket type → browse → get, and tenant isolation). Introduce the `Hold` concept with single-threaded reservation logic (concurrency is Phase 5).
-- **Open option:** the project can be swapped to a ride-hailing/dispatch domain (geospatial + matching algorithm); the phases and skills are identical. Not currently chosen.
+- **Done — Phase 2 so far (all committed and pushed):**
+  - `tests/TicketingPlatform.UnitTests` (xUnit 2.9.3): **41 green tests** — full state-machine transition matrix (`[Theory]`/`[InlineData]`, 9+3+6 cases) + all three FluentValidation validators (regex boundaries for currency and slug, price/quantity bounds, `FakeTimeProvider` for the future-date rule).
+  - FluentValidation in Application; validators resolved per-request; **`FluentValidationFilter`** (global `IAsyncActionFilter`) validates any action argument with a registered `IValidator<T>` and short-circuits with RFC 7807 `ValidationProblem` — controllers contain no validation code.
+  - API versioning (`Asp.Versioning.Mvc` 10): URL-segment `api/v{version}/...`, default v1.0, `ReportApiVersions`. `requests.http` updated to `/api/v1`.
+  - **Clean Architecture refactor, stages 1–4 of 5 done:** solution split into `Domain` (entities + state machine, zero deps) ← `Application` (contracts, validators, `ITenantContext` port, `Abstractions/`) ← `Infrastructure` (`Persistence/TicketingDbContext` + migrations + `AddInfrastructure(connString)` DI extension; Npgsql + EF Design packages live here) ← `Api` (controllers, middleware, filter, composition root). EF verified cross-project: `migrations list` works, `has-pending-model-changes` = none, runtime smoke test green.
+  - Security: `System.Security.Cryptography.Xml` pinned to 10.0.9 (NU1903 via EF Design cleared).
+- **Now — finish Phase 2:**
+  1. **(current) Clean Architecture stage 5:** Application services + repository ports; thin controllers; controllers stop referencing `TicketingDbContext`. 5a = tenant slice (`Result`/`Result<T>` in `Application/Common`, `ITenantRepository` port, `TenantRepository` in Infrastructure, `TenantService`, thin `TenantsController`, DI registration). 5b = event slice (same pattern: `IEventRepository`, `EventService` owning pagination/create/add-ticket-type/publish/close, thin `EventsController` mapping `Result` errors to 404/409).
+  2. Integration tests: `WebApplicationFactory` + Testcontainers against real Postgres — tenant isolation, transition endpoints (204/409/404), pagination + filtering, duplicate slug 409, full create → browse → get flow.
+  3. Introduce the `Hold` concept (TTL reservation, single-threaded correctness + unit tests; concurrency is Phase 5). Then tag `v2-clean` (architecture milestone) and update this STATUS.
+- **Then (the road to the production-ready product):** Phase 3 auth **built inside this repo** (Identity user store + JWT + refresh tokens; roles/policies/resource-based authz; tenant claim replaces the `X-Tenant-Id` header) → Phase 4 (payment client with resilience, Redis cache-aside, CQRS read models) → Phase 5 (oversell prevention 3 ways, RabbitMQ + outbox, booking saga, background services, ticket PDFs; tag `v2-eventdriven`) → Phase 5b (SignalR) → Phase 6 (Dockerfile + compose full stack, GitHub Actions CI, Kubernetes, health checks, rate limiting, OpenTelemetry) → Phase 7 (vertical-slice set piece, design write-ups, README polish; tag `v3-production`).
+- **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 
 When you finish a phase, move its items into "Done" and update the "Now" list.

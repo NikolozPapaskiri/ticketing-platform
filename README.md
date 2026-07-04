@@ -1,99 +1,158 @@
-# Ticketing Platform — Phase 1 scaffold
+# Ticketing Platform
 
-A multi-tenant event ticketing API. This is the **Phase 1 (naive)** slice from the project spec: ASP.NET Core 10 + EF Core 10 + PostgreSQL, with multi-tenancy baked in from the start. It is deliberately un-layered (controllers call the `DbContext` directly). You refactor it to Clean Architecture in Phase 2, after you have felt where the naive structure hurts.
+A multi-tenant event ticketing and booking platform — ASP.NET Core 10, EF Core 10, PostgreSQL,
+Clean Architecture. Event organizers (tenants) create events and sell tickets; customers browse
+and buy. The interesting part is not CRUD: it is selling a finite, contested resource correctly,
+under load, in real time, for many tenants at once.
 
-## What you learn from this code
+This is a deliberately staged build (naive → layered → event-driven → production). Each stage is
+tagged so the progression is reviewable: `v1-naive` is the un-layered Phase 1; the Clean
+Architecture refactor is in progress on `main`. The full plan and current status live in
+[CLAUDE.md](CLAUDE.md).
 
-- The ASP.NET Core hosting model, the built-in DI container, and service lifetimes.
-- The middleware pipeline (a correlation-id middleware and a tenant-resolution middleware) and why order matters.
-- EF Core mechanics: `DbContext`, entity configuration with the Fluent API, relationships, migrations, async queries, and reading the generated SQL.
-- **Multi-tenancy via a global query filter:** every tenant-owned read is scoped to the current tenant automatically.
-- Structured logging with `ILogger` and log scopes.
-- Optimistic-concurrency setup (Postgres `xmin`) on inventory, ready for the contention work in Phase 5.
-- A minimal `IExceptionHandler` returning RFC 7807 ProblemDetails.
+## Architecture
+
+Clean Architecture; dependencies point inward. No project references Api; Domain references nothing.
+
+```
+            ┌──────────────────────────────┐
+            │  TicketingPlatform.Api       │  controllers, middleware, filters,
+            │  (composition root)          │  ProblemDetails, versioning, DI wiring
+            └────────────┬─────────────────┘
+                         │ references
+     ┌───────────────────┼───────────────────────┐
+     ▼                                           ▼
+┌─────────────────────────────┐   ┌──────────────────────────────────┐
+│ TicketingPlatform.          │   │ TicketingPlatform.Infrastructure │
+│ Application                 │◄──┤ EF Core DbContext, migrations,   │
+│ contracts (DTOs),           │   │ repositories, AddInfrastructure()│
+│ validators, ports           │   └──────────────────────────────────┘
+│ (ITenantContext, repos)     │
+└────────────┬────────────────┘
+             ▼
+┌─────────────────────────────┐
+│ TicketingPlatform.Domain    │  entities, EventStatus state machine,
+│ (no dependencies)           │  domain exceptions
+└─────────────────────────────┘
+```
+
+- **Domain** — `Tenant`, `Event`, `TicketType`, `Inventory`; the guarded `Event` status state
+  machine (`Draft → OnSale → Closed`, explicit transition table, terminal `Closed`).
+- **Application** — request/response contracts, FluentValidation validators, ports
+  (`ITenantContext`; repositories and use-case services are the in-progress final stage).
+- **Infrastructure** — `TicketingDbContext` (fluent configuration, global query filters,
+  Postgres `xmin` concurrency token), migrations, `AddInfrastructure(connectionString)`.
+- **Api** — versioned controllers (`/api/v1/...`), tenant-resolution + correlation-id middleware,
+  global `FluentValidationFilter`, `IExceptionHandler` returning RFC 7807 ProblemDetails.
+
+## Key design decisions (the "why", short form)
+
+- **Multi-tenancy: shared schema + EF Core global query filters.** Every tenant-owned read is
+  scoped to the current tenant automatically — no hand-written `WHERE TenantId = ...` anywhere.
+  Cross-tenant reads return 404 (the row is invisible, not forbidden). The tenant currently comes
+  from an `X-Tenant-Id` header via middleware; Phase 3 replaces that with a tenant claim on the
+  authenticated principal.
+- **State machine on the entity, not in the controller.** `Event.CanTransitionTo/TransitionTo`
+  with an explicit allowed-transitions table; controllers pre-check and return **409** RFC 7807
+  ProblemDetails for illegal moves; the entity throws `InvalidStatusTransitionException` as a
+  defense-in-depth backstop.
+- **Uniform error contract.** Every error — validation (400 + per-field map), missing tenant
+  (400), conflict (409), unhandled (500) — is RFC 7807 with `type` and `traceId`.
+- **Validation as a cross-cutting filter.** FluentValidation validators live in Application; a
+  single global action filter validates any bound argument that has a registered `IValidator<T>`.
+  Uniqueness (tenant slug) is deliberately NOT a validator rule — that guard belongs to the DB
+  unique index (check-then-insert races); the API maps the conflict to 409.
+- **Offset pagination with guardrails.** `page` validated, `pageSize` clamped to 100, stable
+  ordering with an `Id` tiebreaker, count-then-page. Keyset pagination is the documented upgrade
+  path for scale.
+- **Optimistic concurrency via Postgres `xmin`** on `Inventory` (declared as a `uint` shadow
+  property; Npgsql 10 removed the old `UseXminAsConcurrencyToken()` helper). Foundation for the
+  Phase 5 oversell-prevention work.
+- **URL-segment API versioning** (`Asp.Versioning`, `api/v{version}`), default v1.0,
+  `api-supported-versions` response header.
+- **`DateTimeOffset` everywhere** (Npgsql `timestamp with time zone` safety) and manual, explicit
+  DTO mapping (no AutoMapper).
 
 ## Prerequisites
 
-- .NET 10 SDK (`dotnet --version` should print 10.x). Download: https://dotnet.microsoft.com/en-us/download/dotnet/10.0
-- Docker (for PostgreSQL).
-- EF Core CLI tool: `dotnet tool install --global dotnet-ef`
+- **.NET 10 SDK** (pinned by `global.json` to 10.0.300, `rollForward: latestFeature`).
+- **Docker** (PostgreSQL 17).
+- **EF Core CLI v10**: `dotnet tool update --global dotnet-ef --version 10.0.0`.
+- IDE note: building `net10.0` requires MSBuild 18 — **Visual Studio 2026** (or any editor + the
+  `dotnet` CLI, which uses the SDK's own MSBuild). Visual Studio 2022 cannot build this solution.
 
 ## Run it
 
 ```bash
-# 1. Start PostgreSQL
+# 1. PostgreSQL (host port 5433 — 5432 is often taken by a native install)
 docker compose up -d
 
-# 2. Restore packages
-#    If a package version fails to resolve, see "Package versions" below.
-dotnet restore
+# 2. Build
+dotnet build TicketingPlatform.sln -c Release
 
-# 3. Create the database schema from the model
-dotnet ef migrations add InitialCreate --project src/TicketingPlatform.Api
-dotnet ef database update --project src/TicketingPlatform.Api
+# 3. Apply migrations (cross-project: migrations live in Infrastructure, startup is Api)
+dotnet ef database update --project src/TicketingPlatform.Infrastructure --startup-project src/TicketingPlatform.Api
 
-# 4. Run the API
+# 4. Run
 dotnet run --project src/TicketingPlatform.Api
 ```
 
-The API listens on `http://localhost:5000`. The OpenAPI document is at `http://localhost:5000/openapi/v1.json` in Development.
+API: `http://localhost:5000`, all routes under `/api/v1`. OpenAPI document at
+`/openapi/v1.json` in Development (document name `v1` is unrelated to the API version). `GET /`
+returns 404 by design — this is an API, not a site.
 
-### Package versions
-
-The `.csproj` pins `10.0.0` for the framework-aligned packages. If `dotnet restore` reports a version is not found, let the CLI pick the latest compatible version:
+### Tests
 
 ```bash
-cd src/TicketingPlatform.Api
-dotnet add package Microsoft.AspNetCore.OpenApi
-dotnet add package Microsoft.EntityFrameworkCore.Design
-dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
+dotnet test   # xUnit; unit tests for the domain state machine and all validators
 ```
 
-## See multi-tenancy work (the point of Phase 1)
+## See multi-tenancy work
 
-Open `requests.http` in Rider or VS Code (with the REST Client extension) and run the requests top to bottom. The walkthrough:
+Open [`requests.http`](requests.http) (VS 2026 / Rider / VS Code REST Client) and run it top to
+bottom:
 
-1. Create two tenants (Aurora Live, Vortex Events). Tenant creation needs no tenant header; tenants are the top-level owners.
-2. Create an event under each tenant by sending a different `X-Tenant-Id` header.
-3. List events as tenant A: you see only Aurora's event. List as tenant B: only Vortex's. The global query filter scopes every read with no `WHERE TenantId = ...` written by hand in the controller.
-4. The kicker: try to GET tenant A's event by id while sending tenant B's header. You get 404, because the filter excludes it. Tenant B cannot even see that the row exists.
+1. Create two tenants (no tenant header — tenants are the top-level owners).
+2. Create an event under each tenant with its `X-Tenant-Id` header.
+3. List events as tenant A → only A's events; as tenant B → only B's. No tenant predicate is
+   written in any controller — the global query filter injects it (EF SQL logging is on; watch
+   the console).
+4. The kicker: GET tenant A's event id with tenant B's header → **404**. B cannot even learn the
+   row exists.
+5. Publish/close an event, then repeat a transition → **409** ProblemDetails from the state
+   machine. Try `?status=OnSale&page=1&pageSize=1` on the browse endpoint for paged, filtered
+   results.
 
-Watch the console while you do this. EF Core SQL logging is on (`Microsoft.EntityFrameworkCore.Database.Command` at Information), so you see the exact SQL, including the tenant predicate the filter injects.
+## API surface (v1)
 
-## Code tour
+| Method | Route | Notes |
+| --- | --- | --- |
+| POST | `/api/v1/tenants` | create tenant; slug conflict → 409 |
+| GET | `/api/v1/tenants` | list tenants (admin view, unfiltered) |
+| GET | `/api/v1/events?page=&pageSize=&status=` | tenant-scoped, paged, filtered browse |
+| GET | `/api/v1/events/{id}` | full event graph (ticket types + inventory) |
+| POST | `/api/v1/events` | create (starts `Draft`) |
+| POST | `/api/v1/events/{id}/publish` | `Draft → OnSale`, else 409 |
+| POST | `/api/v1/events/{id}/close` | `Draft/OnSale → Closed`, else 409 |
+| POST | `/api/v1/events/{eventId}/ticket-types` | add ticket type + inventory |
 
-- `Program.cs` — composition root: DI registration, middleware order, OpenAPI, exception handling.
-- `Domain/` — the entities: `Tenant`, `Event`, `TicketType`, `Inventory`. Plain classes; no framework attributes (configuration lives in the DbContext).
-- `Tenancy/TenantContext.cs` — `ITenantContext` (read) and `TenantContext` (scoped, holds the current tenant for the request).
-- `Tenancy/TenantResolutionMiddleware.cs` — reads the `X-Tenant-Id` header into the tenant context. In Phase 3 this is replaced by the authenticated user's tenant claim.
-- `Data/TicketingDbContext.cs` — entity configuration and the **global query filter**. `Tenant` has no filter; `Event`, `TicketType`, and `Inventory` are filtered by `TenantId == CurrentTenantId`.
-- `Controllers/` — `TenantsController` (admin, unfiltered) and `EventsController` (tenant-scoped).
-- `Common/` — `CorrelationIdMiddleware` and `GlobalExceptionHandler`.
-- `Contracts/Dtos.cs` — request/response records. Mapping is explicit and manual on purpose (no AutoMapper).
+All event routes require `X-Tenant-Id` (400 without it). All errors are RFC 7807.
 
-## A few .NET details in this code worth understanding
+## Roadmap (staged; tags mark milestones)
 
-- **Why a global query filter on a DbContext property works.** The filter lambda `e => e.TenantId == CurrentTenantId` references a property on the context instance. EF builds the model once but evaluates that property per query, so each request is scoped to its own tenant. The `DbContext` reads the tenant from the injected scoped `ITenantContext`.
-- **Lifetimes.** `DbContext` and `TenantContext` are both scoped (one per request). Injecting a scoped service into the DbContext constructor is fine; injecting a scoped service into a singleton would be the classic captive-dependency bug.
-- **`DateTimeOffset`, not `DateTime`.** Postgres `timestamp with time zone` plus `DateTime` is a common Npgsql trap (it rejects non-UTC `DateTime`). Using `DateTimeOffset` sidesteps it. Send ISO 8601 with an offset, for example `2026-07-01T20:00:00Z`.
-- **`xmin` concurrency token.** `Inventory` uses Postgres's system `xmin` column as an optimistic-concurrency token (`UseXminAsConcurrencyToken`). It does nothing visible yet; it is the foundation for Phase 5, where concurrent buyers must not oversell.
-- **ProblemDetails everywhere.** `AddProblemDetails` plus an `IExceptionHandler` means unhandled errors return a structured RFC 7807 body, not a raw stack trace. Phase 2 expands this into a full validation error contract.
-
-## Deliberately not here yet (and where it arrives)
-
-- Authentication and authorization, audit log: Phase 3 (the `X-Tenant-Id` header stands in for a tenant claim until then).
-- FluentValidation and the full error contract: Phase 2.
-- Clean Architecture layering: Phase 2 (you refactor this naive structure).
-- Tests: Phase 2 (Week 4).
-- Redis, RabbitMQ, sagas, background services, holds, the booking flow: Phases 4 and 5.
-
-## Phase 1 exercises (cement the mechanics)
-
-1. Add a `GET /api/events/{id}/ticket-types` endpoint. Confirm it is tenant-scoped without you writing a tenant predicate.
-2. Add a `capacity` validation: reject a ticket type with `totalQuantity <= 0` (use `ModelState`/manual check for now; FluentValidation comes in Phase 2).
-3. Change one read query to `AsNoTracking()` and observe in the logs that behavior is unchanged for reads, then explain why no-tracking is the right default for read endpoints.
-4. Temporarily remove the global query filter on `Event` and rerun the walkthrough. Watch tenant isolation break. Put it back. That is the lesson.
-
-## Next step
-
-Phase 2 begins: validation with FluentValidation, the RFC 7807 error contract, the first tests, and the refactor to Clean Architecture. Ask when you want it.
+- **Now (Phase 2):** finish the Clean Architecture refactor (use-case services + repository
+  ports, thin controllers), then integration tests with Testcontainers against real Postgres,
+  then the `Hold` (TTL reservation) concept.
+- **Phase 3:** authentication & authorization in-repo — Identity + JWT + refresh tokens; roles,
+  policies, resource-based authorization; the tenant claim replaces the header.
+- **Phase 4:** resilient payment-provider client (`IHttpClientFactory` + Polly), Redis
+  cache-aside, CQRS read models.
+- **Phase 5:** the centerpiece — oversell prevention compared three ways (optimistic `xmin`,
+  pessimistic locking, Redis atomic decrement), RabbitMQ with a transactional outbox, the booking
+  saga (hold → pay → confirm → issue), background services (hold expiry, reconciliation), ticket
+  PDFs in object storage. Tag `v2-eventdriven`.
+- **Phase 5b:** SignalR live availability (Redis backplane).
+- **Phase 6:** Dockerfile + full-stack compose, GitHub Actions CI, Kubernetes (probes, multiple
+  replicas), rate limiting, graceful shutdown, OpenTelemetry. Tag `v3-production`.
+- **Phase 7:** vertical-slice set piece + architecture write-ups (Clean vs Vertical Slice,
+  monolith vs microservices).
