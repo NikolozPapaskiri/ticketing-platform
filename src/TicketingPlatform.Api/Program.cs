@@ -2,6 +2,7 @@ using FluentValidation;
 using TicketingPlatform.Api.Common;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Services;
 using TicketingPlatform.Application.Validation;
 using TicketingPlatform.Infrastructure;
 using Asp.Versioning;
@@ -41,6 +42,9 @@ builder.Services.AddValidatorsFromAssemblyContaining<CreateEventRequestValidator
 builder.Services.AddSingleton(TimeProvider.System); // real clock in prod; tests pass
 
 builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("Default")!);
+
+// Application use-case services. Scoped: they hold a scoped repository.
+builder.Services.AddScoped<TenantService>();
 
 var app = builder.Build();
 
