@@ -1,48 +1,48 @@
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using TicketingPlatform.Application.Contracts;
-using TicketingPlatform.Infrastructure.Persistence;
-using TicketingPlatform.Domain;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Contracts;
+using TicketingPlatform.Application.Services;
+using TicketingPlatform.Domain;
 
 namespace TicketingPlatform.Api.Controllers;
 
 /// <summary>
-/// Tenant-scoped event operations. Reads are filtered to the current tenant automatically by the
-/// DbContext global query filter; writes stamp the current tenant id. Note there is no hand-written
-/// "WHERE TenantId = ..." anywhere in this controller. That is the filter doing its job.
+/// Tenant-scoped event operations. Thin by design: HTTP-shaped guards (missing tenant, page
+/// parameter validation) and Result-to-status mapping live here; querying, the state machine,
+/// and mapping live in EventService. Tenant isolation is enforced by the EF global query filter
+/// inside Infrastructure — no hand-written tenant predicate anywhere.
 /// </summary>
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/events")]
 public class EventsController : ControllerBase
 {
-    private readonly TicketingDbContext _db;
+    private readonly EventService _events;
     private readonly ITenantContext _tenant;
     private readonly ILogger<EventsController> _logger;
 
-    public EventsController(TicketingDbContext db, ITenantContext tenant, ILogger<EventsController> logger)
+    public EventsController(EventService events, ITenantContext tenant, ILogger<EventsController> logger)
     {
-        _db = db;
+        _events = events;
         _tenant = tenant;
         _logger = logger;
     }
 
     [HttpGet]
     public async Task<ActionResult<PagedResponse<EventListItemResponse>>> List(
-    [FromQuery] int page = 1,
-    [FromQuery] int pageSize = 20,
-    [FromQuery] EventStatus? status = null,
-    CancellationToken ct = default)
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] EventStatus? status = null,
+        CancellationToken ct = default)
     {
         if (!_tenant.HasTenant)
             return MissingTenant();
 
-        // page: reject bad values (400). pageSize: clamp silently. Both are senior guardrails â€”
-        // without the clamp, ?pageSize=1000000 pulls the whole table again.
-        if(page < 1)
+        // page: reject bad values (400). pageSize: clamp silently. Both are guardrails —
+        // without the clamp, ?pageSize=1000000 pulls the whole table.
+        if (page < 1)
             return Problem(
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Invalid page number",
@@ -50,107 +50,30 @@ public class EventsController : ControllerBase
 
         pageSize = Math.Clamp(pageSize, 1, 100);
 
-        // Composable IQueryable: nothing executes yet. The tenant query filter is already baked in.
-        var query = _db.Events.AsNoTracking();
-
-        // Conditional chaining â€” the .Where only joins the expression tree when a filter is present.
-        // e.Status == enum DOES translate to SQL because of HasConversion<string>() in the DbContext.
-        if(status is not null)
-            query = query.Where(e => e.Status == status);
-
-        // Query 1: count of the *filtered* set (must come after the Where, before Skip/Take).
-        var totalCount = await query.CountAsync(ct);
-
-        // Query 2: the page itself. Stable order needs the Id tiebreaker â€” offset paging over a
-        // non-unique key (StartsAt) is non-deterministic; two events at the same time could swap pages.
-        var rows = await query
-            .OrderBy(e => e.StartsAt)
-            .ThenBy(e => e.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(e => new { e.Id, e.Name, e.VenueName, e.StartsAt, e.Status })
-            .ToListAsync(ct);
-
-        // Map in memory â€” Status.ToString() is not reliably translatable inside the SQL projection,
-        // which is why the Select above projects the enum and we format it here.
-        var items = rows
-            .Select(r => new EventListItemResponse(r.Id, r.Name, r.VenueName, r.StartsAt, r.Status.ToString()))
-            .ToList();
-
-        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
-
-        return Ok(new PagedResponse<EventListItemResponse>(items, page, pageSize, totalCount, totalPages));
+        return Ok(await _events.ListAsync(page, pageSize, status, ct));
     }
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<EventResponse>> GetById(Guid id, CancellationToken ct)
     {
         if (!_tenant.HasTenant)
-        {
             return MissingTenant();
-        }
 
-        // Load the graph, then map in memory. This keeps Status.ToString() and the nested mapping
-        // off the SQL side, where enum.ToString() is not reliably translatable.
-        var ev = await _db.Events
-            .AsNoTracking()
-            .Include(e => e.TicketTypes)
-                .ThenInclude(tt => tt.Inventory)
-            .FirstOrDefaultAsync(e => e.Id == id, ct);
-
-        if (ev is null)
-        {
-            return NotFound();
-        }
-
-        var response = new EventResponse(
-            ev.Id,
-            ev.Name,
-            ev.Description,
-            ev.VenueName,
-            ev.StartsAt,
-            ev.Status.ToString(),
-            ev.TicketTypes
-                .Select(tt => new TicketTypeResponse(
-                    tt.Id,
-                    tt.Name,
-                    tt.Price,
-                    tt.Currency,
-                    tt.Inventory.TotalQuantity,
-                    tt.Inventory.AvailableQuantity))
-                .ToList());
-
-        return Ok(response);
+        var result = await _events.GetByIdAsync(id, ct);
+        return result.IsSuccess ? Ok(result.Value) : NotFound();
     }
 
     [HttpPost]
     public async Task<ActionResult<EventResponse>> Create(CreateEventRequest request, CancellationToken ct)
     {
         if (!_tenant.HasTenant)
-        {
             return MissingTenant();
-        }
 
-        var ev = new Event
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenant.TenantId!.Value,
-            Name = request.Name,
-            Description = request.Description,
-            VenueName = request.VenueName,
-            StartsAt = request.StartsAt,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
+        var response = await _events.CreateAsync(_tenant.TenantId!.Value, request, ct);
 
-        _db.Events.Add(ev);
-        await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Created event {EventId} for tenant {TenantId}", response.Id, _tenant.TenantId);
 
-        _logger.LogInformation("Created event {EventId} for tenant {TenantId}", ev.Id, ev.TenantId);
-
-        var response = new EventResponse(
-            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(), []);
-
-        return CreatedAtAction(nameof(GetById), new { id = ev.Id }, response);
+        return CreatedAtAction(nameof(GetById), new { id = response.Id }, response);
     }
 
     [HttpPost("{eventId:guid}/ticket-types")]
@@ -160,54 +83,11 @@ public class EventsController : ControllerBase
         CancellationToken ct)
     {
         if (!_tenant.HasTenant)
-        {
             return MissingTenant();
-        }
 
-        // The query is tenant-scoped, so an event from another tenant is invisible and returns 404.
-        var eventExists = await _db.Events.AnyAsync(e => e.Id == eventId, ct);
-        if (!eventExists)
-        {
-            return NotFound();
-        }
-
-        var tenantId = _tenant.TenantId!.Value;
-        var ticketType = new TicketType
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            EventId = eventId,
-            Name = request.Name,
-            Price = request.Price,
-            Currency = request.Currency,
-            Inventory = new Inventory
-            {
-                Id = Guid.NewGuid(),
-                TenantId = tenantId,
-                TotalQuantity = request.TotalQuantity,
-                AvailableQuantity = request.TotalQuantity
-            }
-        };
-
-        _db.TicketTypes.Add(ticketType);
-        await _db.SaveChangesAsync(ct);
-
-        var response = new TicketTypeResponse(
-            ticketType.Id,
-            ticketType.Name,
-            ticketType.Price,
-            ticketType.Currency,
-            ticketType.Inventory.TotalQuantity,
-            ticketType.Inventory.AvailableQuantity);
-
-        return Ok(response);
+        var result = await _events.AddTicketTypeAsync(_tenant.TenantId!.Value, eventId, request, ct);
+        return result.IsSuccess ? Ok(result.Value) : NotFound();
     }
-
-    private ObjectResult MissingTenant() =>
-        Problem(
-            statusCode: StatusCodes.Status400BadRequest,
-            title: "Missing tenant",
-            detail: $"The '{TenantResolutionMiddleware.TenantHeader}' header is required for this operation.");
 
     [HttpPost("{id:guid}/publish")]   // Draft -> OnSale
     public Task<IActionResult> Publish(Guid id, CancellationToken ct)
@@ -219,27 +99,29 @@ public class EventsController : ControllerBase
 
     private async Task<IActionResult> Transition(Guid id, EventStatus target, CancellationToken ct)
     {
-        if(!_tenant.HasTenant)
+        if (!_tenant.HasTenant)
             return MissingTenant();
 
-        // FirstOrDefaultAsync (a LINQ query) honors the tenant global query filter, so a tenant
-        // can't transition another tenant's event. It's also a *tracked* query, so the change saves.
-        var ev = await _db.Events.FirstOrDefaultAsync(e => e.Id == id, ct);
-        if(ev is null)
-            return NotFound();
+        var result = await _events.TransitionAsync(id, target, ct);
+        if (result.IsSuccess)
+        {
+            _logger.LogInformation("Transitioned event {EventId} to {Status}", id, target);
+            return NoContent();
+        }
 
-        if(!ev.CanTransitionTo(target))
-            // Use the Problem() helper (not Conflict(new ProblemDetails{...})) so the body runs through
-            // the ProblemDetailsFactory and carries the same type + traceId as every other error here.
-            return Problem(
+        return result.Error switch
+        {
+            Application.Common.ResultError.NotFound => NotFound(),
+            _ => Problem(
                 statusCode: StatusCodes.Status409Conflict,
                 title: "Illegal status transition",
-                detail: $"An event in '{ev.Status}' cannot move to '{target}'.");
-
-        ev.TransitionTo(target);              // safe: pre-checked, won't throw
-        await _db.SaveChangesAsync(ct);
-
-        _logger.LogInformation("Transitioned event {EventId} to {Status}", ev.Id, target);
-        return NoContent();
+                detail: result.Message)
+        };
     }
+
+    private ObjectResult MissingTenant() =>
+        Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Missing tenant",
+            detail: $"The '{TenantResolutionMiddleware.TenantHeader}' header is required for this operation.");
 }

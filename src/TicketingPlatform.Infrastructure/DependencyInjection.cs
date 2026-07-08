@@ -19,6 +19,7 @@ public static class DependencyInjection
         // Repositories: Application-defined ports, EF-backed implementations. Scoped, same as
         // the DbContext they wrap.
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IEventRepository, EventRepository>();
 
         return services;
     }
