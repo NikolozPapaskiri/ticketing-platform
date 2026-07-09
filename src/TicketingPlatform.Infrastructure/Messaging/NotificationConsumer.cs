@@ -106,6 +106,14 @@ public sealed class NotificationConsumer : BackgroundService
 
     private async Task HandleAsync(BasicDeliverEventArgs ea, CancellationToken ct)
     {
+        // Rejoin the trace that the dispatcher stamped into the headers (Consumer span):
+        // the same trace id now spans HTTP request -> outbox -> broker -> this handler.
+        string? traceParent = null;
+        if (ea.BasicProperties.Headers?.TryGetValue("traceparent", out var raw) == true && raw is byte[] bytes)
+            traceParent = Encoding.UTF8.GetString(bytes);
+        using var activity = MessagingDiagnostics.Source.StartActivity(
+            "consume OrderConfirmed", System.Diagnostics.ActivityKind.Consumer, traceParent);
+
         var messageId = Guid.Parse(ea.BasicProperties.MessageId!);
 
         using var scope = _scopes.CreateScope();

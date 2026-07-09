@@ -79,10 +79,17 @@ public sealed class OutboxDispatcher : BackgroundService
 
         foreach (var message in batch)
         {
+            // Continue the originating request's trace across the async boundary (Producer span).
+            using var activity = MessagingDiagnostics.Source.StartActivity(
+                $"publish {message.Type}", System.Diagnostics.ActivityKind.Producer, message.TraceParent);
+
             var properties = new BasicProperties
             {
                 MessageId = message.Id.ToString(), // the consumer's dedupe handle
-                Persistent = true                  // survive a broker restart
+                Persistent = true,                 // survive a broker restart
+                Headers = activity is null
+                    ? null
+                    : new Dictionary<string, object?> { ["traceparent"] = activity.Id }
             };
 
             await channel.BasicPublishAsync(

@@ -21,6 +21,12 @@ public class OutboxMessage
     public DateTimeOffset OccurredAt { get; set; }
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }
+
+    /// <summary>
+    /// W3C traceparent of the request that produced this event. The dispatcher polls outside
+    /// any request context, so without this column the trace would end at the outbox write.
+    /// </summary>
+    public string? TraceParent { get; set; }
 }
 
 /// <summary>Consumer-side dedupe: at-least-once delivery means "have I seen this MessageId already?"</summary>

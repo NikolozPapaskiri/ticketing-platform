@@ -30,7 +30,9 @@ public sealed class OutboxWriter : IOutbox
             Id = Guid.NewGuid(),
             Type = type,
             Payload = JsonSerializer.Serialize(payload, Json),
-            OccurredAt = _clock.GetUtcNow()
+            OccurredAt = _clock.GetUtcNow(),
+            // Capture the current trace so the dispatcher can continue it (see OutboxMessage docs).
+            TraceParent = System.Diagnostics.Activity.Current?.Id
         });
     }
 }

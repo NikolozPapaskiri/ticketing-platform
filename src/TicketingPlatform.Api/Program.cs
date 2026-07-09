@@ -1,10 +1,15 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using Asp.Versioning;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Api.Common;
 using TicketingPlatform.Api.Development;
@@ -14,6 +19,8 @@ using TicketingPlatform.Application.Services;
 using TicketingPlatform.Application.Validation;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure;
+using TicketingPlatform.Infrastructure.Health;
+using TicketingPlatform.Infrastructure.Messaging;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Security;
 
@@ -103,6 +110,62 @@ builder.Services.AddSingleton(
     builder.Configuration.GetSection(TicketingPlatform.Application.Common.HoldOptions.SectionName)
         .Get<TicketingPlatform.Application.Common.HoldOptions>() ?? new());
 
+// --- Health checks. Liveness ("is the process alive") deliberately checks NOTHING external:
+// a pod that is alive but missing a dependency must fail READINESS (stop routing traffic to
+// it), not liveness (restarting it won't bring Postgres back). Conflating the two causes the
+// classic restart-loop-during-an-outage incident.
+builder.Services.AddSingleton<RedisHealthCheck>();
+builder.Services.AddSingleton<RabbitMqHealthCheck>();
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<TicketingDbContext>("postgres", tags: ["ready"])
+    .AddCheck<RedisHealthCheck>("redis", tags: ["ready"])
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+
+// --- Rate limiting on the auth endpoints: cut brute force off BEFORE PBKDF2 burns CPU per
+// guess. Fixed window per client IP; limit configurable (tests raise it, prod keeps it tight).
+var authRequestsPerMinute = builder.Configuration.GetValue("RateLimiting:AuthRequestsPerMinute", 20);
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = authRequestsPerMinute,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0 // reject immediately; queuing auth attempts helps nobody
+        }));
+});
+
+// --- OpenTelemetry: traces (HTTP in, HTTP out, Npgsql SQL, and the custom messaging source
+// that carries traces across the RabbitMQ hop) + metrics. Exported over OTLP when
+// Otlp:Endpoint is configured (Jaeger/Grafana etc.); otherwise instrumentation is on but quiet.
+var otlpEndpoint = builder.Configuration["Otlp:Endpoint"];
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("ticketing-api"))
+    .WithTracing(tracing =>
+    {
+        tracing.AddAspNetCoreInstrumentation()
+               .AddHttpClientInstrumentation()
+               .AddSource("Npgsql")                            // SQL spans from the driver
+               .AddSource(MessagingDiagnostics.SourceName);    // outbox publish/consume spans
+        if (otlpEndpoint is not null)
+            tracing.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics.AddAspNetCoreInstrumentation()
+               .AddHttpClientInstrumentation()
+               .AddRuntimeInstrumentation();
+        if (otlpEndpoint is not null)
+            metrics.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+    });
+
+// --- Graceful shutdown: on SIGTERM (K8s pod termination) the host stops accepting requests,
+// then gives in-flight requests and the background services' stopping tokens this long to
+// drain before the process dies. A mid-saga order gets to finish.
+builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
+
 var app = builder.Build();
 
 // Correlation id wraps everything, including the exception handler, so error logs carry it.
@@ -130,11 +193,19 @@ if (app.Environment.IsDevelopment())
     await DevDataSeeder.SeedAsync(app.Services);
 }
 
+// Rate limiting sits before authentication: a brute-forcer gets 429'd without ever reaching
+// the password hasher.
+app.UseRateLimiter();
+
 // Pipeline order matters: authenticate (who are you) -> resolve tenant FROM the principal's
 // claim -> authorize (are you allowed) -> endpoint.
 app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseAuthorization();
+
+// Probe endpoints (anonymous by design - Kubernetes is not going to log in).
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
 
 app.MapControllers();
 
