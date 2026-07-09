@@ -22,11 +22,13 @@ public sealed class HoldService
     public static readonly TimeSpan HoldTtl = TimeSpan.FromMinutes(10);
 
     private readonly IHoldRepository _holds;
+    private readonly ICacheService _cache;
     private readonly TimeProvider _clock;
 
-    public HoldService(IHoldRepository holds, TimeProvider clock)
+    public HoldService(IHoldRepository holds, ICacheService cache, TimeProvider clock)
     {
         _holds = holds;
+        _cache = cache;
         _clock = clock; // injected clock keeps the TTL testable (FakeTimeProvider in tests)
     }
 
@@ -57,6 +59,10 @@ public sealed class HoldService
         _holds.Add(hold);
         await _holds.SaveChangesAsync(ct); // decrement + hold row commit together
 
+        // Read-your-writes: staff who just reserved must see the new availability immediately,
+        // so the owning event's cached graph is invalidated (after the commit).
+        await _cache.RemoveAsync(CacheKeys.EventGraph(tenantId, inventory.TicketType.EventId), ct);
+
         return Result<HoldResponse>.Success(Map(hold));
     }
 
@@ -81,6 +87,8 @@ public sealed class HoldService
         hold.Release();
         hold.TicketType.Inventory.Release(hold.Quantity);
         await _holds.SaveChangesAsync(ct); // status flip + quantity return in one transaction
+
+        await _cache.RemoveAsync(CacheKeys.EventGraph(hold.TenantId, hold.TicketType.EventId), ct);
 
         return Result.Success();
     }

@@ -109,6 +109,11 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi(); // serves /openapi/v1.json
 
+    // DEV-ONLY mock payment provider so the saga runs locally with zero external deps.
+    // The resilient PaymentProviderClient points here via PaymentProvider:BaseUrl; tests
+    // exercise the failure paths against WireMock instead.
+    app.MapPost("/dev-payment/charges", () => Results.Ok(new { chargeId = $"ch_{Guid.NewGuid():N}" }));
+
     // Development convenience: migrate + seed the first PlatformAdmin so the closed
     // provisioning chain (only admins create staff) can start. Production migrates
     // deliberately (CI/CD step), never implicitly at boot.

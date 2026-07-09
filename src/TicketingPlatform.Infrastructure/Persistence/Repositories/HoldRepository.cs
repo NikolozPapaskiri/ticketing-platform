@@ -12,7 +12,10 @@ public sealed class HoldRepository : IHoldRepository
     public Task<Inventory?> GetInventoryForUpdateAsync(Guid ticketTypeId, CancellationToken ct) =>
         // Tracked: the caller mutates AvailableQuantity and SaveChanges persists the diff.
         // The tenant query filter applies here too - foreign inventory resolves to null.
-        _db.Inventories.FirstOrDefaultAsync(i => i.TicketTypeId == ticketTypeId, ct);
+        // TicketType is included so the service knows the owning EventId (cache invalidation).
+        _db.Inventories
+            .Include(i => i.TicketType)
+            .FirstOrDefaultAsync(i => i.TicketTypeId == ticketTypeId, ct);
 
     public Task<Hold?> GetWithInventoryForUpdateAsync(Guid holdId, CancellationToken ct) =>
         _db.Holds

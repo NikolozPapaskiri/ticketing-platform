@@ -61,7 +61,7 @@ public class EventsController : ControllerBase
         if (!_tenant.HasTenant)
             return MissingTenant();
 
-        var result = await _events.GetByIdAsync(id, ct);
+        var result = await _events.GetByIdAsync(_tenant.TenantId!.Value, id, ct);
         return result.IsSuccess ? Ok(result.Value) : NotFound();
     }
 
@@ -104,7 +104,7 @@ public class EventsController : ControllerBase
         if (!_tenant.HasTenant)
             return MissingTenant();
 
-        var result = await _events.TransitionAsync(id, target, ct);
+        var result = await _events.TransitionAsync(_tenant.TenantId!.Value, id, target, ct);
         if (result.IsSuccess)
         {
             _logger.LogInformation("Transitioned event {EventId} to {Status}", id, target);

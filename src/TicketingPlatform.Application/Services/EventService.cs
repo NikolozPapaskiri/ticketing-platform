@@ -13,8 +13,23 @@ namespace TicketingPlatform.Application.Services;
 /// </summary>
 public sealed class EventService
 {
+    /// <summary>
+    /// TTL for the event graph. Every write that changes what this graph shows (transitions,
+    /// new ticket types, hold create/release) invalidates the key, so the TTL is only the
+    /// backstop for missed invalidations, not the consistency mechanism.
+    /// </summary>
+    private static readonly TimeSpan EventGraphTtl = TimeSpan.FromSeconds(30);
+
     private readonly IEventRepository _events;
-    public EventService(IEventRepository events) => _events = events;
+    private readonly ICacheService _cache;
+
+    public EventService(IEventRepository events, ICacheService cache)
+    {
+        _events = events;
+        _cache = cache;
+    }
+
+    private static string EventGraphKey(Guid tenantId, Guid eventId) => CacheKeys.EventGraph(tenantId, eventId);
 
     public async Task<PagedResponse<EventListItemResponse>> ListAsync(
         int page, int pageSize, EventStatus? status, CancellationToken ct)
@@ -32,13 +47,21 @@ public sealed class EventService
         return new PagedResponse<EventListItemResponse>(items, page, pageSize, totalCount, totalPages);
     }
 
-    public async Task<Result<EventResponse>> GetByIdAsync(Guid id, CancellationToken ct)
+    public async Task<Result<EventResponse>> GetByIdAsync(Guid tenantId, Guid id, CancellationToken ct)
     {
+        // Cache-aside: check cache -> on miss load from the DB and populate with a TTL.
+        var key = EventGraphKey(tenantId, id);
+        var cached = await _cache.GetAsync<EventResponse>(key, ct);
+        if (cached is not null)
+            return Result<EventResponse>.Success(cached);
+
         var ev = await _events.GetWithGraphAsync(id, ct);
         if (ev is null)
-            return Result<EventResponse>.NotFound($"Event '{id}' was not found.");
+            return Result<EventResponse>.NotFound($"Event '{id}' was not found."); // misses are NOT cached
 
-        return Result<EventResponse>.Success(Map(ev));
+        var response = Map(ev);
+        await _cache.SetAsync(key, response, EventGraphTtl, ct);
+        return Result<EventResponse>.Success(response);
     }
 
     public async Task<EventResponse> CreateAsync(Guid tenantId, CreateEventRequest request, CancellationToken ct)
@@ -89,6 +112,9 @@ public sealed class EventService
         _events.AddTicketType(ticketType);
         await _events.SaveChangesAsync(ct);
 
+        // A new ticket type changes the event graph shape - invalidate, don't wait for TTL.
+        await _cache.RemoveAsync(EventGraphKey(tenantId, eventId), ct);
+
         return Result<TicketTypeResponse>.Success(new TicketTypeResponse(
             ticketType.Id,
             ticketType.Name,
@@ -98,7 +124,7 @@ public sealed class EventService
             ticketType.Inventory.AvailableQuantity));
     }
 
-    public async Task<Result> TransitionAsync(Guid id, EventStatus target, CancellationToken ct)
+    public async Task<Result> TransitionAsync(Guid tenantId, Guid id, EventStatus target, CancellationToken ct)
     {
         var ev = await _events.GetForUpdateAsync(id, ct);
         if (ev is null)
@@ -110,6 +136,10 @@ public sealed class EventService
 
         ev.TransitionTo(target);
         await _events.SaveChangesAsync(ct);
+
+        // Invalidate AFTER the commit: invalidating before could let a concurrent reader
+        // re-cache the old row in the gap.
+        await _cache.RemoveAsync(EventGraphKey(tenantId, id), ct);
 
         return Result.Success();
     }
