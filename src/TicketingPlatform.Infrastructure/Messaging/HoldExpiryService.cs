@@ -84,17 +84,17 @@ public sealed class HoldExpiryService : BackgroundService
             hold.Expire();
             hold.TicketType.Inventory.Release(hold.Quantity);
 
-            // Announce through the outbox like every other state change.
+            // Announce through the outbox like every other availability change - the projection
+            // consumer treats create/release/expiry identically (it re-reads live truth).
             db.OutboxMessages.Add(new OutboxMessage
             {
                 Id = Guid.NewGuid(),
-                Type = "HoldExpired",
+                Type = "AvailabilityChanged",
                 Payload = JsonSerializer.Serialize(new
                 {
-                    HoldId = hold.Id,
                     hold.TenantId,
-                    hold.TicketTypeId,
-                    hold.Quantity
+                    hold.TicketType.EventId,
+                    hold.TicketTypeId
                 }, Json),
                 OccurredAt = now
             });

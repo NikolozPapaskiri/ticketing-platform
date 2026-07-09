@@ -16,15 +16,17 @@ public sealed class HoldService
     private readonly IHoldRepository _holds;
     private readonly IReservationStrategy _reservation;
     private readonly ICacheService _cache;
+    private readonly IOutbox _outbox;
     private readonly HoldOptions _options;
     private readonly TimeProvider _clock;
 
     public HoldService(IHoldRepository holds, IReservationStrategy reservation, ICacheService cache,
-        HoldOptions options, TimeProvider clock)
+        IOutbox outbox, HoldOptions options, TimeProvider clock)
     {
         _holds = holds;
         _reservation = reservation;
         _cache = cache;
+        _outbox = outbox;
         _options = options; // TTL from the "Holds" config section
         _clock = clock;     // injected clock keeps the TTL testable (FakeTimeProvider in tests)
     }
@@ -47,6 +49,17 @@ public sealed class HoldService
             CreatedAt = now,
             ExpiresAt = now.Add(_options.Ttl)
         };
+
+        // Staged BEFORE the strategy runs: the strategy's SaveChanges flushes this outbox row
+        // together with the decrement + hold row (same scoped DbContext = same transaction).
+        // On a Conflict the strategy never saves, so the staged row dies with the request scope.
+        // The projection consumer re-reads live availability, so the event only needs ids.
+        _outbox.Add("AvailabilityChanged", new
+        {
+            TenantId = tenantId,
+            inventory.TicketType.EventId,
+            TicketTypeId = request.TicketTypeId
+        });
 
         // The contention-safe part. Insufficient stock (or a lost race) comes back as Conflict.
         var reserved = await _reservation.ReserveAsync(hold, ct);
@@ -82,6 +95,15 @@ public sealed class HoldService
             return Result.Conflict($"Hold is already '{hold.Status}' and cannot be released.");
 
         hold.Release();
+
+        // Same pattern as CreateAsync: staged before the strategy's save commits everything.
+        _outbox.Add("AvailabilityChanged", new
+        {
+            hold.TenantId,
+            hold.TicketType.EventId,
+            hold.TicketTypeId
+        });
+
         await _reservation.ReleaseAsync(hold, ct); // credits inventory + persists the status flip
 
         await _cache.RemoveAsync(CacheKeys.EventGraph(hold.TenantId, hold.TicketType.EventId), ct);

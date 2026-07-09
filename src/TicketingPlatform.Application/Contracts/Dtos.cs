@@ -53,6 +53,14 @@ public record OrderResponse(
     string Currency,
     string Status);
 
+// Availability read model (CQRS query side)
+public record TicketAvailabilityResponse(
+    Guid TicketTypeId,
+    string TicketTypeName,
+    int Available,
+    int Total,
+    DateTimeOffset UpdatedAt);
+
 public record PagedResponse<T>(
     IReadOnlyList<T> Items,
     int PageNumber,

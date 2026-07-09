@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Infrastructure.Outbox;
+using TicketingPlatform.Infrastructure.ReadModels;
 
 namespace TicketingPlatform.Infrastructure.Persistence;
 
@@ -32,6 +33,7 @@ public class TicketingDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
+    public DbSet<EventAvailabilityView> EventAvailability => Set<EventAvailabilityView>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -180,6 +182,18 @@ public class TicketingDbContext : DbContext
         modelBuilder.Entity<ProcessedMessage>(b =>
         {
             b.HasKey(m => m.MessageId); // PK IS the dedupe check
+        });
+
+        // CQRS read model: tenant-filtered like every tenant-owned read; the projection
+        // consumer (background, no tenant) uses IgnoreQueryFilters to upsert.
+        modelBuilder.Entity<EventAvailabilityView>(b =>
+        {
+            b.HasKey(v => v.TicketTypeId);
+            b.Property(v => v.EventName).IsRequired().HasMaxLength(200);
+            b.Property(v => v.TicketTypeName).IsRequired().HasMaxLength(100);
+            b.HasIndex(v => v.EventId);  // the query side reads per event
+            b.HasIndex(v => v.TenantId);
+            b.HasQueryFilter(v => v.TenantId == CurrentTenantId);
         });
     }
 }

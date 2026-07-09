@@ -22,14 +22,32 @@ namespace TicketingPlatform.Api.Controllers;
 public class EventsController : ControllerBase
 {
     private readonly EventService _events;
+    private readonly IAvailabilityReadModel _availability;
     private readonly ITenantContext _tenant;
     private readonly ILogger<EventsController> _logger;
 
-    public EventsController(EventService events, ITenantContext tenant, ILogger<EventsController> logger)
+    public EventsController(EventService events, IAvailabilityReadModel availability,
+        ITenantContext tenant, ILogger<EventsController> logger)
     {
         _events = events;
+        _availability = availability;
         _tenant = tenant;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Availability from the CQRS read model: browse traffic reads this denormalized table,
+    /// never the contested Inventories row. Eventually consistent (updated when the
+    /// AvailabilityChanged event flows through the broker) - which is exactly the trade the
+    /// pattern makes: staleness measured in milliseconds for reads that cost nothing.
+    /// </summary>
+    [HttpGet("{id:guid}/availability")]
+    public async Task<ActionResult<IReadOnlyList<TicketAvailabilityResponse>>> GetAvailability(Guid id, CancellationToken ct)
+    {
+        if (!_tenant.HasTenant)
+            return MissingTenant();
+
+        return Ok(await _availability.GetForEventAsync(id, ct));
     }
 
     [HttpGet]

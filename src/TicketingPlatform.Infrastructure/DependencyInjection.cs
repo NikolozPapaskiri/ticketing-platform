@@ -42,6 +42,10 @@ public static class DependencyInjection
         services.AddHostedService<NotificationConsumer>();
         services.AddHostedService<HoldExpiryService>();
 
+        // CQRS: the projection consumer maintains the read model; the query port serves it.
+        services.AddHostedService<AvailabilityProjectionConsumer>();
+        services.AddScoped<IAvailabilityReadModel, AvailabilityReadModel>();
+
         // Security: PBKDF2 hashing + JWT creation. Singletons - both are stateless.
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
         services.AddSingleton<IPasswordHasherService, PasswordHasherService>();

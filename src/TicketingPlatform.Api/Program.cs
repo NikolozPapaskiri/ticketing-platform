@@ -13,6 +13,7 @@ using OpenTelemetry.Trace;
 using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Api.Common;
 using TicketingPlatform.Api.Development;
+using TicketingPlatform.Api.Realtime;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Services;
@@ -110,6 +111,13 @@ builder.Services.AddSingleton(
     builder.Configuration.GetSection(TicketingPlatform.Application.Common.HoldOptions.SectionName)
         .Get<TicketingPlatform.Application.Common.HoldOptions>() ?? new());
 
+// SignalR with the Redis backplane: group membership and broadcasts flow through Redis, so a
+// message published from pod B reaches a client connected to pod A. Without the backplane,
+// live availability silently breaks the moment there is a second replica.
+builder.Services.AddSignalR()
+    .AddStackExchangeRedis(builder.Configuration.GetConnectionString("Redis")!);
+builder.Services.AddSingleton<IAvailabilityBroadcaster, SignalRAvailabilityBroadcaster>();
+
 // --- Health checks. Liveness ("is the process alive") deliberately checks NOTHING external:
 // a pod that is alive but missing a dependency must fail READINESS (stop routing traffic to
 // it), not liveness (restarting it won't bring Postgres back). Conflating the two causes the
@@ -206,6 +214,8 @@ app.UseAuthorization();
 // Probe endpoints (anonymous by design - Kubernetes is not going to log in).
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
+
+app.MapHub<AvailabilityHub>("/hubs/availability"); // live availability push (anonymous by design)
 
 app.MapControllers();
 
