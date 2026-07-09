@@ -24,6 +24,7 @@ public class TicketingDbContext : DbContext
     public DbSet<Event> Events => Set<Event>();
     public DbSet<TicketType> TicketTypes => Set<TicketType>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
+    public DbSet<Hold> Holds => Set<Hold>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -87,6 +88,24 @@ public class TicketingDbContext : DbContext
                 .IsConcurrencyToken();
 
             b.HasQueryFilter(i => i.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<Hold>(b =>
+        {
+            b.HasKey(h => h.Id);
+            b.Property(h => h.Status).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(h => h.TenantId);
+
+            // Phase 5's hold-expiry background service scans "Active holds past their TTL";
+            // this composite index makes that scan an index seek instead of a table walk.
+            b.HasIndex(h => new { h.Status, h.ExpiresAt });
+
+            b.HasOne(h => h.TicketType)
+                .WithMany()
+                .HasForeignKey(h => h.TicketTypeId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasQueryFilter(h => h.TenantId == CurrentTenantId);
         });
     }
 }

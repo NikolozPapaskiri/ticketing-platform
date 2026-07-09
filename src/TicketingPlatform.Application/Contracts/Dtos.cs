@@ -26,6 +26,15 @@ public record TicketTypeResponse(
     int TotalQuantity,
     int AvailableQuantity);
 
+// Hold
+public record CreateHoldRequest(Guid TicketTypeId, int Quantity);
+public record HoldResponse(
+    Guid Id,
+    Guid TicketTypeId,
+    int Quantity,
+    string Status,
+    DateTimeOffset ExpiresAt);
+
 public record PagedResponse<T>(
     IReadOnlyList<T> Items,
     int PageNumber,

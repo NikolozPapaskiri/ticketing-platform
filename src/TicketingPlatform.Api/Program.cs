@@ -46,6 +46,7 @@ builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("De
 // Application use-case services. Scoped: they hold a scoped repository.
 builder.Services.AddScoped<TenantService>();
 builder.Services.AddScoped<EventService>();
+builder.Services.AddScoped<HoldService>();
 
 var app = builder.Build();
 

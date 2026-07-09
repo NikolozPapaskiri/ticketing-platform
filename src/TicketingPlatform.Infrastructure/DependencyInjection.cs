@@ -20,6 +20,7 @@ public static class DependencyInjection
         // the DbContext they wrap.
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IEventRepository, EventRepository>();
+        services.AddScoped<IHoldRepository, HoldRepository>();
 
         return services;
     }
