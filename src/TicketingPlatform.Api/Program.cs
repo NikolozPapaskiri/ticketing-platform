@@ -66,3 +66,7 @@ app.UseMiddleware<TenantResolutionMiddleware>();
 app.MapControllers();
 
 app.Run();
+
+// Minimal hosting generates an internal Program class; WebApplicationFactory<Program> in the
+// integration tests needs it visible. This partial declaration only changes accessibility.
+public partial class Program { }
