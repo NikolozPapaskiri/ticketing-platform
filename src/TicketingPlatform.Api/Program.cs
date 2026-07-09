@@ -13,6 +13,7 @@ using OpenTelemetry.Trace;
 using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Api.Common;
 using TicketingPlatform.Api.Development;
+using TicketingPlatform.Api.Features.SalesReport;
 using TicketingPlatform.Api.Realtime;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Abstractions;
@@ -216,6 +217,9 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => fa
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
 
 app.MapHub<AvailabilityHub>("/hubs/availability"); // live availability push (anonymous by design)
+
+// The vertical-slice set piece (see the file's header for the architecture argument).
+app.MapEventSalesReport();
 
 app.MapControllers();
 
