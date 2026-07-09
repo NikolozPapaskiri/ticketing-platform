@@ -1,0 +1,24 @@
+# Non-secret configuration for the API pods. Connection strings point at the in-cluster
+# Services by DNS name (postgres/redis/rabbitmq).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  # Development in this LOCAL cluster: auto-migrate + seed the dev admin on startup.
+  # A real environment runs migrations as a pipeline/job step and sets Production here.
+  ASPNETCORE_ENVIRONMENT: "Development"
+  ConnectionStrings__Default: "Host=postgres;Port=5432;Database=ticketing;Username=ticketing;Password=ticketing"
+  ConnectionStrings__Redis: "redis:6379"
+  RabbitMq__HostName: "rabbitmq"
+---
+# Secrets go in a Secret, not the ConfigMap - even though in this LOCAL manifest the value is
+# the committed dev key, the shape is right: production replaces this object from a vault
+# (external-secrets, sealed-secrets, CSI driver), never from git.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secrets
+type: Opaque
+stringData:
+  Jwt__SigningKey: "DEV-ONLY-signing-key-ticketing-platform-local-0123456789"

@@ -83,23 +83,56 @@ Clean Architecture; dependencies point inward. No project references Api; Domain
 
 ## Run it
 
+**The whole product, one command (containerized API + Postgres + Redis + RabbitMQ):**
+
 ```bash
-# 1. PostgreSQL (host port 5433 — 5432 is often taken by a native install)
-docker compose up -d
+docker compose up -d --build
+# API:        http://localhost:5000  (migrates + seeds admin@platform.local / Admin123$ on boot)
+# RabbitMQ UI http://localhost:15672 (ticketing / ticketing)
+# Probes:     http://localhost:5000/health/live , /health/ready
+```
 
-# 2. Build
-dotnet build TicketingPlatform.sln -c Release
+**Development loop (API on the host, infra in containers):**
 
-# 3. Apply migrations (cross-project: migrations live in Infrastructure, startup is Api)
-dotnet ef database update --project src/TicketingPlatform.Infrastructure --startup-project src/TicketingPlatform.Api
-
-# 4. Run
-dotnet run --project src/TicketingPlatform.Api
+```bash
+docker compose up -d postgres redis rabbitmq
+dotnet run --project src/TicketingPlatform.Api    # migrates + seeds in Development
+# new migration (cross-project: migrations live in Infrastructure, startup is Api):
+dotnet ef migrations add <Name> --project src/TicketingPlatform.Infrastructure --startup-project src/TicketingPlatform.Api
 ```
 
 API: `http://localhost:5000`, all routes under `/api/v1`. OpenAPI document at
 `/openapi/v1.json` in Development (document name `v1` is unrelated to the API version). `GET /`
 returns 404 by design — this is an API, not a site.
+
+## Operations (Phase 6)
+
+- **Health probes:** `/health/live` checks nothing external (a dependency outage must fail
+  readiness, not liveness — restarting a pod does not fix Postgres); `/health/ready` probes
+  Postgres, Redis, and RabbitMQ.
+- **Rate limiting:** fixed-window per client IP on the auth endpoints (429 before any password
+  hashing runs); limit via `RateLimiting:AuthRequestsPerMinute`.
+- **OpenTelemetry:** traces (ASP.NET Core, HttpClient, Npgsql, and the custom messaging source)
+  + metrics. The outbox stores the W3C `traceparent`, the dispatcher stamps it into message
+  headers, and the consumer rejoins it — **one trace spans HTTP → outbox → RabbitMQ →
+  consumer**. Point `Otlp:Endpoint` at a collector (Jaeger, Grafana) to export.
+- **Graceful shutdown:** 30s drain on SIGTERM so in-flight sagas finish during rolling updates.
+- **CI:** GitHub Actions builds and runs all tests (Testcontainers works on the runners), then
+  builds the image and pushes to GHCR from `main`.
+
+### Kubernetes (local cluster: kind or Docker Desktop)
+
+```bash
+docker build -t ticketing-api:local .
+kind load docker-image ticketing-api:local     # skip on Docker Desktop k8s
+kubectl apply -k k8s/
+kubectl -n ticketing get pods                  # 2 api replicas + postgres/redis/rabbitmq
+kubectl -n ticketing port-forward svc/ticketing-api 5001:80
+```
+
+The manifests carry the teaching notes: readiness-vs-liveness, resource requests/limits,
+why two API replicas are safe here (nothing correctness-critical lives in pod memory), and
+what is dev-cluster-only (emptyDir Postgres, committed dev Secret).
 
 ### Tests
 
@@ -167,8 +200,10 @@ wrong role → 403, cross-tenant → 404. All errors are RFC 7807.
   retry, expiry is the compensation); **transactional outbox → RabbitMQ → idempotent consumer**
   with a dead-letter exchange; hold-expiry background service. 101 tests against real Postgres,
   Redis, and RabbitMQ containers.
-- **Now (Phase 6):** multi-stage Dockerfile + full-stack compose, health checks, GitHub Actions
-  CI, Kubernetes (probes, multiple replicas), rate limiting, graceful shutdown, OpenTelemetry.
-  Tag `v3-production`.
-- **Then (Phase 7):** SignalR live availability + CQRS read models, ticket PDFs, vertical-slice
+- **Done (Phase 6):** multi-stage non-root Dockerfile + one-command full-stack compose; health
+  probes; GitHub Actions CI (all tests + GHCR image); Kubernetes manifests (2 API replicas,
+  readiness/liveness, resources); per-IP auth rate limiting; graceful shutdown; OpenTelemetry
+  traces + metrics with trace propagation across the RabbitMQ hop.
+- **Now (Phase 7):** SignalR live availability + CQRS read models, ticket PDFs, vertical-slice
   set piece, architecture write-ups (Clean vs Vertical Slice, monolith vs microservices).
+  Tag `v3-production` at the end.

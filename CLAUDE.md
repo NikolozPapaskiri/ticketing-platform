@@ -456,11 +456,20 @@ dotnet test                                                        # 101 tests (
   - Endpoints: `POST /api/v1/orders` (201/404/409/503), `GET /api/v1/orders/{id}`. `AddHolds`, `AddAuth`, `AddOrdersAndMessaging` migrations. Configurable `Holds:TtlSeconds` + `Holds:ExpiryScanSeconds`.
   - **101 tests green (58 unit + 43 integration)** incl. the full saga chain (order → outbox → broker → consumer → notification, polled), decline-then-retry on the same hold, expiry compensation on a dedicated short-TTL container set.
 - **Deferred (recorded honestly, planned for the Phase 6/7 window):** CQRS read models (pairs naturally with SignalR availability push), SignalR live availability, ticket PDF/object storage, resource-based authorization handler (tenant isolation is enforced by query filters; the handler becomes meaningful with customer-owned orders), rate limiting on auth endpoints.
-- **Now — Phase 6: containerization, CI/CD, Kubernetes, observability:**
-  1. Multi-stage Dockerfile (non-root) + full-stack docker-compose (api + postgres + redis + rabbitmq).
-  2. Health checks (`/health/live`, `/health/ready` probing DB/Redis/broker) → future K8s probes.
-  3. GitHub Actions CI: build + unit + integration tests (Testcontainers works in CI) + image build.
-  4. Kubernetes manifests, multi-replica, rate limiting, graceful shutdown, OpenTelemetry. Tag `v3-production`.
+- **Done — Phase 6: containerization, CI/CD, Kubernetes, observability:**
+  - Health probes: `/health/live` (deliberately dependency-free) + `/health/ready` (EF check for Postgres, custom cached-connection checks for Redis PING + RabbitMQ). Probes anonymous; tests pin that.
+  - Per-IP fixed-window **rate limiting** on `/auth/*` (429 before PBKDF2 runs); `RateLimiting:AuthRequestsPerMinute` (main test factory raises it; a dedicated tight-limit factory proves the 429).
+  - **OpenTelemetry** traces (AspNetCore, HttpClient, `Npgsql` source, `TicketingPlatform.Messaging` source) + metrics (AspNetCore, HttpClient, runtime); OTLP export when `Otlp:Endpoint` set. **Cross-queue trace propagation**: outbox rows store `Activity.Current.Id` (W3C traceparent, `AddOutboxTraceParent` migration), dispatcher opens a Producer span + stamps the `traceparent` header, consumer rejoins as a Consumer span — one trace: HTTP → outbox → broker → consumer.
+  - Graceful shutdown: `HostOptions.ShutdownTimeout` 30s (in-flight sagas drain on SIGTERM).
+  - **Multi-stage Dockerfile** (csproj-first layer caching, aspnet runtime image, non-root `$APP_UID`, port 8080) + `.dockerignore`; **api service in docker-compose** → `docker compose up -d --build` boots the whole product (verified: containerized API migrated, seeded, readiness 200, login OK). Compose env `Development` = migrate+seed (documented; real prod migrates in a pipeline step).
+  - **GitHub Actions CI** (`.github/workflows/ci.yml`): restore/build/test (Testcontainers runs on ubuntu runners) + docker build, GHCR push from `main`.
+  - **k8s/** Kustomize manifests: namespace, postgres/redis/rabbitmq (dev-cluster-only: emptyDir, single replica), ConfigMap + Secret split, API Deployment ×2 replicas with readiness/liveness probes + resource requests/limits, ClusterIP service. `kubectl kustomize` render validated (11 objects). Run: build image `ticketing-api:local` → `kind load` → `kubectl apply -k k8s/`.
+  - **105 tests green (58 unit + 47 integration).**
+- **Now — Phase 7 (final): real-time + polish + interview arsenal:**
+  1. SignalR live availability (hub + Redis backplane note) paired with a CQRS availability read model updated by the message consumer.
+  2. Ticket PDF on order confirmation (file storage seam).
+  3. One feature as a Vertical Slice + README write-up (Clean vs Slice); monolith-vs-microservices essay.
+  4. README/design-decisions final polish, clean history review, tag **`v3-production`**. Then interview-prep reps against the codebase (the plan's W14 mock rounds).
 - **Then (the road to the production-ready product):** Phase 3 auth **built inside this repo** (Identity user store + JWT + refresh tokens; roles/policies/resource-based authz; tenant claim replaces the `X-Tenant-Id` header) → Phase 4 (payment client with resilience, Redis cache-aside, CQRS read models) → Phase 5 (oversell prevention 3 ways, RabbitMQ + outbox, booking saga, background services, ticket PDFs; tag `v2-eventdriven`) → Phase 5b (SignalR) → Phase 6 (Dockerfile + compose full stack, GitHub Actions CI, Kubernetes, health checks, rate limiting, OpenTelemetry) → Phase 7 (vertical-slice set piece, design write-ups, README polish; tag `v3-production`).
 - **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 

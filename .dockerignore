@@ -1,0 +1,12 @@
+# Keep the build context small and secrets/junk out of image layers.
+**/bin/
+**/obj/
+.git/
+.vs/
+.github/
+k8s/
+tests/
+*.md
+requests.http
+docker-compose.yml
+Dockerfile

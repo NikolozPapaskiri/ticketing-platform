@@ -1,0 +1,57 @@
+# CI: every push/PR builds the solution and runs ALL tests - including the integration suite,
+# which spins up real Postgres/Redis/RabbitMQ containers via Testcontainers (GitHub's ubuntu
+# runners ship Docker, so "test against real infrastructure" holds in CI too).
+# On main, the container image is also built and pushed to GHCR.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test (unit + integration via Testcontainers)
+        run: dotnet test --no-build -c Release --logger "console;verbosity=normal"
+
+  docker-image:
+    # The image is proof the Dockerfile stays buildable; it only publishes from main.
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}

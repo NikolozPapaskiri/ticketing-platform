@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-api
+spec:
+  # TWO replicas on purpose: this is where in-process assumptions break (and ours hold:
+  # inventory safety is the xmin token in Postgres, cache is Redis, queue position would be
+  # Redis - nothing correctness-critical lives in pod memory). The expiry service runs in both
+  # pods; that is safe here because the state machine + concurrency token make it idempotent.
+  replicas: 2
+  selector:
+    matchLabels: { app: ticketing-api }
+  template:
+    metadata:
+      labels: { app: ticketing-api }
+    spec:
+      containers:
+        - name: api
+          image: ticketing-api:local   # built locally, loaded into the cluster (see README)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef: { name: api-config }
+            - secretRef: { name: api-secrets }
+          # Readiness gates traffic: not ready (a dependency is down) => taken out of the
+          # Service, NOT restarted. Liveness restarts only a wedged process. Mixing these up
+          # is the classic restart-loop-during-a-DB-outage incident.
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health/live, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          # Requests = scheduling reservation; limits = ceiling. Without limits one leaky pod
+          # OOMs the node (the noisy-neighbor problem).
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ticketing-api
+spec:
+  selector: { app: ticketing-api }
+  ports:
+    - port: 80
+      targetPort: 8080
+  # Try it without an Ingress: kubectl -n ticketing port-forward svc/ticketing-api 5001:80
