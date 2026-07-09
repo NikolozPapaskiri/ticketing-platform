@@ -29,9 +29,15 @@ public class OutboxMessage
     public string? TraceParent { get; set; }
 }
 
-/// <summary>Consumer-side dedupe: at-least-once delivery means "have I seen this MessageId already?"</summary>
+/// <summary>
+/// Consumer-side dedupe: at-least-once delivery means "have I seen this MessageId already?"
+/// Keyed per CONSUMER (composite PK): one event fans out to several consumers (OrderConfirmed
+/// drives both the notification writer and the ticket issuer), and each must track its own
+/// progress - a shared mark would make whichever consumer runs second silently skip.
+/// </summary>
 public class ProcessedMessage
 {
     public Guid MessageId { get; set; }
+    public required string Consumer { get; set; }
     public DateTimeOffset ProcessedAt { get; set; }
 }

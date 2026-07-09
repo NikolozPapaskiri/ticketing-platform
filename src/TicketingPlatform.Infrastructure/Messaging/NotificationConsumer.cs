@@ -119,8 +119,9 @@ public sealed class NotificationConsumer : BackgroundService
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
 
-        // IDEMPOTENCY GATE: seen it before? Then at-least-once delivered it twice - skip.
-        if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId, ct))
+        // IDEMPOTENCY GATE: seen it before (by THIS consumer)? At-least-once delivered twice - skip.
+        const string consumerName = nameof(NotificationConsumer);
+        if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
             return;
 
         using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
@@ -136,7 +137,7 @@ public sealed class NotificationConsumer : BackgroundService
                       $"{root.GetProperty("amount").GetDecimal()} {root.GetProperty("currency").GetString()}",
             CreatedAt = DateTimeOffset.UtcNow
         });
-        db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, ProcessedAt = DateTimeOffset.UtcNow });
+        db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, Consumer = consumerName, ProcessedAt = DateTimeOffset.UtcNow });
 
         // Side effect + dedupe mark in ONE transaction: they live or die together.
         await db.SaveChangesAsync(ct);

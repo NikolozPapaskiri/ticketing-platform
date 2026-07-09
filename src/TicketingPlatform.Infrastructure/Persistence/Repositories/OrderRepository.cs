@@ -19,6 +19,9 @@ public sealed class OrderRepository : IOrderRepository
     public Task<Order?> GetAsync(Guid orderId, CancellationToken ct) =>
         _db.Orders.AsNoTracking().FirstOrDefaultAsync(o => o.Id == orderId, ct);
 
+    public Task<Ticket?> GetTicketAsync(Guid orderId, CancellationToken ct) =>
+        _db.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
+
     public void Add(Order order) => _db.Orders.Add(order);
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);

@@ -34,6 +34,7 @@ public class TicketingDbContext : DbContext
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
     public DbSet<EventAvailabilityView> EventAvailability => Set<EventAvailabilityView>();
+    public DbSet<Ticket> Tickets => Set<Ticket>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -181,7 +182,17 @@ public class TicketingDbContext : DbContext
 
         modelBuilder.Entity<ProcessedMessage>(b =>
         {
-            b.HasKey(m => m.MessageId); // PK IS the dedupe check
+            b.HasKey(m => new { m.MessageId, m.Consumer }); // per-consumer dedupe (fan-out safe)
+            b.Property(m => m.Consumer).HasMaxLength(100);
+        });
+
+        modelBuilder.Entity<Ticket>(b =>
+        {
+            b.HasKey(t => t.Id);
+            b.Property(t => t.FilePath).IsRequired().HasMaxLength(500);
+            b.HasIndex(t => t.OrderId).IsUnique(); // one issued document per order
+            b.HasIndex(t => t.TenantId);
+            b.HasQueryFilter(t => t.TenantId == CurrentTenantId);
         });
 
         // CQRS read model: tenant-filtered like every tenant-owned read; the projection

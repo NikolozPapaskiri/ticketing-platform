@@ -8,29 +8,25 @@ using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
-using TicketingPlatform.Infrastructure.ReadModels;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
 /// <summary>
-/// The CQRS projection: consumes AvailabilityChanged events, upserts the denormalized
-/// EventAvailabilityView row, then pushes the fresh number to connected clients through the
-/// IAvailabilityBroadcaster port (SignalR lives behind it, in the Api layer).
-/// Design choice worth defending: the event carries only IDS, and the projection re-reads the
-/// LIVE inventory row. Delta-carrying events applied out of order corrupt a counter forever;
-/// a re-read projection is idempotent and self-healing by construction - replay, reorder, or
-/// duplicate the events and the row still converges on the truth.
+/// Second consumer of OrderConfirmed (fan-out: same event, own queue, own dedupe row):
+/// renders the ticket PDF, stores it via the IFileStorage port, records the Ticket row.
+/// Issuing tickets asynchronously keeps the checkout latency free of PDF rendering - the
+/// buyer's 201 never waits for a document.
 /// </summary>
-public sealed class AvailabilityProjectionConsumer : BackgroundService
+public sealed class TicketIssuerConsumer : BackgroundService
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly RabbitMqOptions _options;
-    private readonly ILogger<AvailabilityProjectionConsumer> _logger;
+    private readonly ILogger<TicketIssuerConsumer> _logger;
 
-    public AvailabilityProjectionConsumer(IServiceScopeFactory scopes, IOptions<RabbitMqOptions> options,
-        ILogger<AvailabilityProjectionConsumer> logger)
+    public TicketIssuerConsumer(IServiceScopeFactory scopes, IOptions<RabbitMqOptions> options, ILogger<TicketIssuerConsumer> logger)
     {
         _scopes = scopes;
         _options = options.Value;
@@ -51,7 +47,7 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Availability projection lost the broker; reconnecting shortly");
+                _logger.LogError(ex, "Ticket issuer lost the broker; reconnecting shortly");
                 try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
                 catch (OperationCanceledException) { break; }
             }
@@ -73,10 +69,12 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
 
         await channel.ExchangeDeclareAsync(_options.Exchange, ExchangeType.Topic, durable: true, cancellationToken: ct);
         await channel.ExchangeDeclareAsync(_options.DeadLetterExchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
-        await channel.QueueDeclareAsync("availability-projection", durable: true, exclusive: false, autoDelete: false,
+        // Own queue on the same routing key as the notification consumer: the topic exchange
+        // copies OrderConfirmed into BOTH queues - that is how fan-out works, not shared reads.
+        await channel.QueueDeclareAsync("ticket-issuer", durable: true, exclusive: false, autoDelete: false,
             arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = _options.DeadLetterExchange },
             cancellationToken: ct);
-        await channel.QueueBindAsync("availability-projection", _options.Exchange, routingKey: "AvailabilityChanged", cancellationToken: ct);
+        await channel.QueueBindAsync("ticket-issuer", _options.Exchange, routingKey: "OrderConfirmed", cancellationToken: ct);
 
         await channel.BasicQosAsync(0, prefetchCount: 1, global: false, ct);
 
@@ -90,12 +88,12 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Poison message {MessageId} in availability projection; dead-lettering", ea.BasicProperties.MessageId);
+                _logger.LogError(ex, "Poison message {MessageId} in ticket issuer; dead-lettering", ea.BasicProperties.MessageId);
                 await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, ct);
             }
         };
 
-        await channel.BasicConsumeAsync("availability-projection", autoAck: false, consumer, ct);
+        await channel.BasicConsumeAsync("ticket-issuer", autoAck: false, consumer, ct);
         await Task.Delay(Timeout.InfiniteTimeSpan, ct);
     }
 
@@ -106,47 +104,49 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
 
-        const string consumerName = nameof(AvailabilityProjectionConsumer);
+        const string consumerName = nameof(TicketIssuerConsumer);
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
-            return; // at-least-once: seen it, skip it
+            return;
 
         using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
-        var ticketTypeId = payload.RootElement.GetProperty("ticketTypeId").GetGuid();
+        var orderId = payload.RootElement.GetProperty("orderId").GetGuid();
 
-        // Re-read the LIVE truth (background scope has no tenant -> IgnoreQueryFilters).
-        var truth = await db.TicketTypes
+        // Re-read the full graph from the source of truth (background scope: IgnoreQueryFilters).
+        var order = await db.Orders
             .IgnoreQueryFilters()
-            .Include(tt => tt.Inventory)
-            .Include(tt => tt.Event)
+            .Include(o => o.Hold).ThenInclude(h => h.TicketType).ThenInclude(tt => tt.Event)
             .AsNoTracking()
-            .FirstOrDefaultAsync(tt => tt.Id == ticketTypeId, ct);
-        if (truth is null)
-            return; // ticket type deleted between event and projection - nothing to project
+            .FirstOrDefaultAsync(o => o.Id == orderId, ct);
+        if (order is null)
+            return;
 
-        var view = await db.EventAvailability.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(v => v.TicketTypeId == ticketTypeId, ct);
-        if (view is null)
+        var generator = scope.ServiceProvider.GetRequiredService<ITicketDocumentGenerator>();
+        var pdf = generator.Generate(new TicketDocumentData(
+            order.Id,
+            order.Hold.TicketType.Event.Name,
+            order.Hold.TicketType.Event.VenueName,
+            order.Hold.TicketType.Event.StartsAt,
+            order.Hold.TicketType.Name,
+            order.Hold.Quantity,
+            order.CustomerEmail,
+            order.Amount,
+            order.Currency));
+
+        var storage = scope.ServiceProvider.GetRequiredService<IFileStorage>();
+        var path = $"tickets/{order.TenantId}/{order.Id}.pdf";
+        await storage.SaveAsync(path, pdf, ct);
+
+        db.Tickets.Add(new Ticket
         {
-            view = new EventAvailabilityView
-            {
-                TicketTypeId = ticketTypeId,
-                TenantId = truth.TenantId,
-                EventId = truth.EventId,
-                EventName = truth.Event.Name,
-                TicketTypeName = truth.Name
-            };
-            db.EventAvailability.Add(view);
-        }
-
-        view.Available = truth.Inventory.AvailableQuantity;
-        view.Total = truth.Inventory.TotalQuantity;
-        view.UpdatedAt = DateTimeOffset.UtcNow;
-
+            Id = Guid.NewGuid(),
+            TenantId = order.TenantId,
+            OrderId = order.Id,
+            FilePath = path,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
         db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, Consumer = consumerName, ProcessedAt = DateTimeOffset.UtcNow });
-        await db.SaveChangesAsync(ct); // projection + dedupe mark in one transaction
+        await db.SaveChangesAsync(ct);
 
-        // Push AFTER the commit - clients must never hear about state that then rolls back.
-        var broadcaster = scope.ServiceProvider.GetRequiredService<IAvailabilityBroadcaster>();
-        await broadcaster.BroadcastAsync(truth.EventId, ticketTypeId, view.Available, ct);
+        _logger.LogInformation("Issued ticket PDF for order {OrderId}", orderId);
     }
 }

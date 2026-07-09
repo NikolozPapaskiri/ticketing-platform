@@ -43,6 +43,7 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
         builder.UseSetting("PaymentProvider:BaseUrl", PaymentProvider.Urls[0] + "/");
         builder.UseSetting("PaymentProvider:RetryBaseDelayMs", "50"); // fast retry storms in tests
         builder.UseSetting("RateLimiting:AuthRequestsPerMinute", "100000"); // the suite logs in constantly
+        builder.UseSetting("FileStorage:Root", Path.Combine(Path.GetTempPath(), $"ticketing-tests-{Guid.NewGuid():N}"));
         builder.UseEnvironment("Development");
     }
 

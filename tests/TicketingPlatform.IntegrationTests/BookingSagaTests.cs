@@ -123,6 +123,31 @@ public class BookingSagaTests
     }
 
     [Fact]
+    public async Task ConfirmedOrder_EventuallyGetsATicketPdf()
+    {
+        StubPaymentSuccess();
+        var (staff, _, hold) = await SetupHoldAsync(quantity: 1);
+        var orderResponse = await _client.PostAsAsync(staff, "/api/v1/orders",
+            new { holdId = hold.Id, customerEmail = "pdf-buyer@example.com" });
+        var order = await orderResponse.Content.ReadFromJsonAsync<OrderDto>(ApiClientExtensions.Json);
+
+        // Issued asynchronously (OrderConfirmed -> ticket-issuer consumer), so poll.
+        HttpResponseMessage? ticket = null;
+        for (var i = 0; i < 60; i++)
+        {
+            ticket = await _client.GetAsAsync(staff, $"/api/v1/orders/{order!.Id}/ticket");
+            if (ticket.StatusCode == HttpStatusCode.OK) break;
+            await Task.Delay(250);
+        }
+
+        Assert.Equal(HttpStatusCode.OK, ticket!.StatusCode);
+        Assert.Equal("application/pdf", ticket.Content.Headers.ContentType!.MediaType);
+        var bytes = await ticket.Content.ReadAsByteArrayAsync();
+        Assert.True(bytes.Length > 500, "suspiciously small ticket document");
+        Assert.Equal("%PDF", System.Text.Encoding.ASCII.GetString(bytes, 0, 4)); // magic header
+    }
+
+    [Fact]
     public async Task ReleasedHold_CannotBePurchased()
     {
         StubPaymentSuccess();

@@ -83,8 +83,9 @@ public class RealtimeAvailabilityTests
 
         var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(15)));
         Assert.True(completed == received.Task, "no availabilityChanged push within 15s - hub/backplane/projection chain broken");
-        Assert.Equal(tt.Id, received.Task.Result.TicketTypeId);
-        Assert.Equal(15, received.Task.Result.Available);
+        var push = await received.Task;
+        Assert.Equal(tt.Id, push.TicketTypeId);
+        Assert.Equal(15, push.Available);
     }
 
     private static async Task<int?> PollAsync(Func<Task<int?>> read, Func<int?, bool> done)

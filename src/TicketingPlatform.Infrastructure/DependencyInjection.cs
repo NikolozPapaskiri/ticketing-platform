@@ -4,9 +4,11 @@ using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Infrastructure.Caching;
+using TicketingPlatform.Infrastructure.Documents;
 using TicketingPlatform.Infrastructure.Messaging;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Payments;
+using TicketingPlatform.Infrastructure.Storage;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Persistence.Repositories;
 using TicketingPlatform.Infrastructure.Reservations;
@@ -45,6 +47,11 @@ public static class DependencyInjection
         // CQRS: the projection consumer maintains the read model; the query port serves it.
         services.AddHostedService<AvailabilityProjectionConsumer>();
         services.AddScoped<IAvailabilityReadModel, AvailabilityReadModel>();
+
+        // Ticket issuing: PDF generation + file storage behind ports, consumed asynchronously.
+        services.AddSingleton<ITicketDocumentGenerator, QuestPdfTicketGenerator>();
+        services.AddSingleton<IFileStorage, LocalFileStorage>();
+        services.AddHostedService<TicketIssuerConsumer>();
 
         // Security: PBKDF2 hashing + JWT creation. Singletons - both are stateless.
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
