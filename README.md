@@ -104,7 +104,9 @@ returns 404 by design — this is an API, not a site.
 ### Tests
 
 ```bash
-dotnet test   # xUnit; unit tests for the domain state machine and all validators
+dotnet test   # 79 tests: xUnit unit tests (state machine, reservation math, validators)
+              # + Testcontainers integration tests against a throwaway real Postgres
+              # (Docker must be running for the integration project)
 ```
 
 ## See multi-tenancy work
@@ -135,16 +137,19 @@ bottom:
 | POST | `/api/v1/events/{id}/publish` | `Draft → OnSale`, else 409 |
 | POST | `/api/v1/events/{id}/close` | `Draft/OnSale → Closed`, else 409 |
 | POST | `/api/v1/events/{eventId}/ticket-types` | add ticket type + inventory |
+| POST | `/api/v1/holds` | reserve inventory under a 10-min TTL; insufficient stock → 409 |
+| GET | `/api/v1/holds/{id}` | inspect a hold |
+| POST | `/api/v1/holds/{id}/release` | give the quantity back; double release → 409 |
 
-All event routes require `X-Tenant-Id` (400 without it). All errors are RFC 7807.
+All event and hold routes require `X-Tenant-Id` (400 without it). All errors are RFC 7807.
 
 ## Roadmap (staged; tags mark milestones)
 
-- **Now (Phase 2):** finish the Clean Architecture refactor (use-case services + repository
-  ports, thin controllers), then integration tests with Testcontainers against real Postgres,
-  then the `Hold` (TTL reservation) concept.
-- **Phase 3:** authentication & authorization in-repo — Identity + JWT + refresh tokens; roles,
-  policies, resource-based authorization; the tenant claim replaces the header.
+- **Done (Phase 2, tag `v2-clean`):** Clean Architecture (use-case services + repository ports,
+  thin controllers, Api free of EF), integration tests with Testcontainers against real
+  Postgres (79 tests total), and the `Hold` TTL reservation concept.
+- **Now (Phase 3):** authentication & authorization in-repo — Identity + JWT + refresh tokens;
+  roles, policies, resource-based authorization; the tenant claim replaces the header.
 - **Phase 4:** resilient payment-provider client (`IHttpClientFactory` + Polly), Redis
   cache-aside, CQRS read models.
 - **Phase 5:** the centerpiece — oversell prevention compared three ways (optimistic `xmin`,
