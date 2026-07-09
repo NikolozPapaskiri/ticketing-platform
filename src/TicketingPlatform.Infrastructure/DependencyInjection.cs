@@ -1,11 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Infrastructure.Caching;
 using TicketingPlatform.Infrastructure.Payments;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Persistence.Repositories;
+using TicketingPlatform.Infrastructure.Reservations;
 using TicketingPlatform.Infrastructure.Security;
 
 namespace TicketingPlatform.Infrastructure;
@@ -58,6 +60,26 @@ public static class DependencyInjection
                 ?? throw new InvalidOperationException("Missing 'ConnectionStrings:Redis' configuration.");
         });
         services.AddSingleton<ICacheService, RedisCacheService>();
+
+        // Oversell prevention: pick ONE of the three strategies via configuration.
+        // All three ship so they can be compared under load; switch by setting
+        // "Reservation:Strategy" to "OptimisticConcurrency" | "PessimisticLock" | "RedisAtomic".
+        var strategy = configuration["Reservation:Strategy"] ?? "OptimisticConcurrency";
+        switch (strategy)
+        {
+            case "PessimisticLock":
+                services.AddScoped<IReservationStrategy, PessimisticReservationStrategy>();
+                break;
+            case "RedisAtomic":
+                // The raw multiplexer (DECRBY/INCRBY/SET NX) - IDistributedCache is too narrow.
+                services.AddSingleton<IConnectionMultiplexer>(_ =>
+                    ConnectionMultiplexer.Connect(configuration.GetConnectionString("Redis")!));
+                services.AddScoped<IReservationStrategy, RedisAtomicReservationStrategy>();
+                break;
+            default:
+                services.AddScoped<IReservationStrategy, OptimisticReservationStrategy>();
+                break;
+        }
 
         return services;
     }

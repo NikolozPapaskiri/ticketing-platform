@@ -6,44 +6,39 @@ using TicketingPlatform.Domain;
 namespace TicketingPlatform.Application.Services;
 
 /// <summary>
-/// Hold use cases: reserve inventory under a TTL, release it back. The inventory decrement and
-/// the hold row are saved in ONE SaveChanges, i.e. one database transaction - a crash between
-/// them can never strand reserved quantity without a hold record.
-/// Phase 2 scope: single-threaded correctness. Two concurrent buyers can still race the
-/// TryReserve check; Phase 5 closes that with the xmin token (+ retry), pessimistic locking,
-/// and a Redis atomic decrement, compared head to head.
+/// Hold use cases: reserve inventory under a TTL, release it back. The actual contention-safe
+/// decrement is delegated to IReservationStrategy - three implementations (optimistic xmin,
+/// pessimistic FOR UPDATE, Redis atomic) selected by the "Reservation:Strategy" config value.
+/// Each strategy persists the decrement and the hold row atomically.
 /// </summary>
 public sealed class HoldService
 {
     /// <summary>
-    /// How long a hold reserves inventory before the Phase 5 expiry service reclaims it.
+    /// How long a hold reserves inventory before the expiry background service reclaims it.
     /// Constant for now; becomes per-tenant configuration when tenants get settings.
     /// </summary>
     public static readonly TimeSpan HoldTtl = TimeSpan.FromMinutes(10);
 
     private readonly IHoldRepository _holds;
+    private readonly IReservationStrategy _reservation;
     private readonly ICacheService _cache;
     private readonly TimeProvider _clock;
 
-    public HoldService(IHoldRepository holds, ICacheService cache, TimeProvider clock)
+    public HoldService(IHoldRepository holds, IReservationStrategy reservation, ICacheService cache, TimeProvider clock)
     {
         _holds = holds;
+        _reservation = reservation;
         _cache = cache;
         _clock = clock; // injected clock keeps the TTL testable (FakeTimeProvider in tests)
     }
 
     public async Task<Result<HoldResponse>> CreateAsync(Guid tenantId, CreateHoldRequest request, CancellationToken ct)
     {
-        // Tenant-scoped tracked load: a foreign tenant's ticket type is invisible => NotFound.
+        // Tenant-scoped pre-check: a foreign tenant's ticket type is invisible => NotFound.
+        // Also yields the owning EventId for cache invalidation after a successful reserve.
         var inventory = await _holds.GetInventoryForUpdateAsync(request.TicketTypeId, ct);
         if (inventory is null)
             return Result<HoldResponse>.NotFound($"Ticket type '{request.TicketTypeId}' was not found.");
-
-        // Insufficient stock is an expected outcome, not an error: 409, with the current
-        // availability so the client can offer the buyer what is actually left.
-        if (!inventory.TryReserve(request.Quantity))
-            return Result<HoldResponse>.Conflict(
-                $"Cannot hold {request.Quantity} tickets; only {inventory.AvailableQuantity} available.");
 
         var now = _clock.GetUtcNow();
         var hold = new Hold
@@ -56,11 +51,16 @@ public sealed class HoldService
             ExpiresAt = now.Add(HoldTtl)
         };
 
-        _holds.Add(hold);
-        await _holds.SaveChangesAsync(ct); // decrement + hold row commit together
+        // The contention-safe part. Insufficient stock (or a lost race) comes back as Conflict.
+        var reserved = await _reservation.ReserveAsync(hold, ct);
+        if (!reserved.IsSuccess)
+        {
+            return reserved.Error == ResultError.NotFound
+                ? Result<HoldResponse>.NotFound(reserved.Message!)
+                : Result<HoldResponse>.Conflict(reserved.Message!);
+        }
 
-        // Read-your-writes: staff who just reserved must see the new availability immediately,
-        // so the owning event's cached graph is invalidated (after the commit).
+        // Read-your-writes: staff who just reserved must see the new availability immediately.
         await _cache.RemoveAsync(CacheKeys.EventGraph(tenantId, inventory.TicketType.EventId), ct);
 
         return Result<HoldResponse>.Success(Map(hold));
@@ -85,8 +85,7 @@ public sealed class HoldService
             return Result.Conflict($"Hold is already '{hold.Status}' and cannot be released.");
 
         hold.Release();
-        hold.TicketType.Inventory.Release(hold.Quantity);
-        await _holds.SaveChangesAsync(ct); // status flip + quantity return in one transaction
+        await _reservation.ReleaseAsync(hold, ct); // credits inventory + persists the status flip
 
         await _cache.RemoveAsync(CacheKeys.EventGraph(hold.TenantId, hold.TicketType.EventId), ct);
 
