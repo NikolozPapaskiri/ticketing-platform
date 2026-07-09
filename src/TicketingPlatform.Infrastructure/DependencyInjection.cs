@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Infrastructure.Caching;
+using TicketingPlatform.Infrastructure.Messaging;
+using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Payments;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Persistence.Repositories;
@@ -30,6 +32,15 @@ public static class DependencyInjection
         services.AddScoped<IHoldRepository, HoldRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
+        services.AddScoped<IOrderRepository, OrderRepository>();
+
+        // The outbox writer stages events through the caller's scoped DbContext (one transaction);
+        // the dispatcher + consumer + expiry service run as hosted background services.
+        services.AddScoped<IOutbox, OutboxWriter>();
+        services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
+        services.AddHostedService<OutboxDispatcher>();
+        services.AddHostedService<NotificationConsumer>();
+        services.AddHostedService<HoldExpiryService>();
 
         // Security: PBKDF2 hashing + JWT creation. Singletons - both are stateless.
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));

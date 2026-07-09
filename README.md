@@ -137,27 +137,38 @@ bottom:
 | POST | `/api/v1/events/{id}/publish` | `Draft → OnSale`, else 409 |
 | POST | `/api/v1/events/{id}/close` | `Draft/OnSale → Closed`, else 409 |
 | POST | `/api/v1/events/{eventId}/ticket-types` | add ticket type + inventory |
-| POST | `/api/v1/holds` | reserve inventory under a 10-min TTL; insufficient stock → 409 |
+| POST | `/api/v1/holds` | reserve inventory under a TTL; insufficient stock → 409 |
 | GET | `/api/v1/holds/{id}` | inspect a hold |
 | POST | `/api/v1/holds/{id}/release` | give the quantity back; double release → 409 |
+| POST | `/api/v1/orders` | the booking saga: charge the hold, confirm; declined → 409, provider down → 503 |
+| GET | `/api/v1/orders/{id}` | inspect an order |
+| POST | `/api/v1/auth/register` · `/login` · `/refresh` | customer signup, login, refresh-token rotation |
+| POST | `/api/v1/auth/register-staff` | admin-only staff/admin provisioning |
 
-All event and hold routes require `X-Tenant-Id` (400 without it). All errors are RFC 7807.
+Events/holds/orders require an **OrganizerStaff JWT** (the tenant comes from its signed
+`tenant_id` claim); tenants + staff provisioning require **PlatformAdmin**. Anonymous → 401,
+wrong role → 403, cross-tenant → 404. All errors are RFC 7807.
 
 ## Roadmap (staged; tags mark milestones)
 
 - **Done (Phase 2, tag `v2-clean`):** Clean Architecture (use-case services + repository ports,
-  thin controllers, Api free of EF), integration tests with Testcontainers against real
-  Postgres (79 tests total), and the `Hold` TTL reservation concept.
-- **Now (Phase 3):** authentication & authorization in-repo — Identity + JWT + refresh tokens;
-  roles, policies, resource-based authorization; the tenant claim replaces the header.
-- **Phase 4:** resilient payment-provider client (`IHttpClientFactory` + Polly), Redis
-  cache-aside, CQRS read models.
-- **Phase 5:** the centerpiece — oversell prevention compared three ways (optimistic `xmin`,
-  pessimistic locking, Redis atomic decrement), RabbitMQ with a transactional outbox, the booking
-  saga (hold → pay → confirm → issue), background services (hold expiry, reconciliation), ticket
-  PDFs in object storage. Tag `v2-eventdriven`.
-- **Phase 5b:** SignalR live availability (Redis backplane).
-- **Phase 6:** Dockerfile + full-stack compose, GitHub Actions CI, Kubernetes (probes, multiple
-  replicas), rate limiting, graceful shutdown, OpenTelemetry. Tag `v3-production`.
-- **Phase 7:** vertical-slice set piece + architecture write-ups (Clean vs Vertical Slice,
-  monolith vs microservices).
+  thin controllers, Api free of EF), Testcontainers integration tests, the `Hold` TTL
+  reservation concept.
+- **Done (Phase 3):** JWT auth with refresh-token rotation + reuse detection (family
+  revocation); roles + policies (Customer / OrganizerStaff / PlatformAdmin); the signed
+  `tenant_id` claim replaced the `X-Tenant-Id` header.
+- **Done (Phase 4):** resilient payment client (`IHttpClientFactory` + resilience pipeline,
+  idempotency keys, typed failures) tested against WireMock; Redis cache-aside with per-tenant
+  keys, jittered TTLs, and write-path invalidation.
+- **Done (Phase 5, tag `v2-eventdriven`):** the centerpiece — **oversell prevention implemented
+  three ways** (optimistic `xmin` + retry [active default], pessimistic `SELECT ... FOR UPDATE`,
+  Redis atomic decrement) behind a config-switched `IReservationStrategy`, proven by parallel-
+  buyer tests; the **booking saga** (hold → charge → confirm, decline keeps the hold alive for
+  retry, expiry is the compensation); **transactional outbox → RabbitMQ → idempotent consumer**
+  with a dead-letter exchange; hold-expiry background service. 101 tests against real Postgres,
+  Redis, and RabbitMQ containers.
+- **Now (Phase 6):** multi-stage Dockerfile + full-stack compose, health checks, GitHub Actions
+  CI, Kubernetes (probes, multiple replicas), rate limiting, graceful shutdown, OpenTelemetry.
+  Tag `v3-production`.
+- **Then (Phase 7):** SignalR live availability + CQRS read models, ticket PDFs, vertical-slice
+  set piece, architecture write-ups (Clean vs Vertical Slice, monolith vs microservices).

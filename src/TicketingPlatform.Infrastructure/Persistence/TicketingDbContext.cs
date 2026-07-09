@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Infrastructure.Outbox;
 
 namespace TicketingPlatform.Infrastructure.Persistence;
 
@@ -27,6 +28,10 @@ public class TicketingDbContext : DbContext
     public DbSet<Hold> Holds => Set<Hold>();
     public DbSet<User> Users => Set<User>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -133,6 +138,48 @@ public class TicketingDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(t => t.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Order>(b =>
+        {
+            b.HasKey(o => o.Id);
+            b.Property(o => o.CustomerEmail).IsRequired().HasMaxLength(256);
+            b.Property(o => o.Amount).HasPrecision(18, 2);
+            b.Property(o => o.Currency).IsRequired().HasMaxLength(3);
+            b.Property(o => o.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(o => o.ProviderChargeId).HasMaxLength(100);
+            b.HasIndex(o => o.TenantId);
+            b.HasIndex(o => o.HoldId); // non-unique: a declined order can be retried on the same hold
+            b.HasOne(o => o.Hold)
+                .WithMany()
+                .HasForeignKey(o => o.HoldId)
+                .OnDelete(DeleteBehavior.Restrict); // orders are financial records - never cascade-delete
+
+            b.HasQueryFilter(o => o.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<Notification>(b =>
+        {
+            b.HasKey(n => n.Id);
+            b.Property(n => n.Type).IsRequired().HasMaxLength(50);
+            b.Property(n => n.Message).IsRequired().HasMaxLength(1000);
+            b.HasIndex(n => n.TenantId);
+            b.HasQueryFilter(n => n.TenantId == CurrentTenantId);
+        });
+
+        // Outbox plumbing: NOT tenant-filtered - the dispatcher and the consumer dedupe run in
+        // background scopes with no tenant, and events already carry their tenant in the payload.
+        modelBuilder.Entity<OutboxMessage>(b =>
+        {
+            b.HasKey(m => m.Id);
+            b.Property(m => m.Type).IsRequired().HasMaxLength(100);
+            b.Property(m => m.Payload).IsRequired();
+            b.HasIndex(m => new { m.ProcessedAt, m.OccurredAt }); // the dispatcher's poll path
+        });
+
+        modelBuilder.Entity<ProcessedMessage>(b =>
+        {
+            b.HasKey(m => m.MessageId); // PK IS the dedupe check
         });
     }
 }

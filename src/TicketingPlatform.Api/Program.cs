@@ -96,6 +96,12 @@ builder.Services.AddScoped<TenantService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddScoped<HoldService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<OrderService>();
+
+// Hold TTL / expiry-scan settings (plain singleton so Application stays free of IOptions).
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection(TicketingPlatform.Application.Common.HoldOptions.SectionName)
+        .Get<TicketingPlatform.Application.Common.HoldOptions>() ?? new());
 
 var app = builder.Build();
 

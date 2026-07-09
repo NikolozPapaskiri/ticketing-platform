@@ -39,6 +39,14 @@ public class Hold
             throw new InvalidOperationException($"Cannot expire a hold in status '{Status}'.");
         Status = HoldStatus.Expired;
     }
+
+    /// <summary>A paid hold becomes a sale: the reserved quantity is now permanently sold.</summary>
+    public void Confirm()
+    {
+        if (Status != HoldStatus.Active)
+            throw new InvalidOperationException($"Cannot confirm a hold in status '{Status}'.");
+        Status = HoldStatus.Confirmed;
+    }
 }
 
 public enum HoldStatus

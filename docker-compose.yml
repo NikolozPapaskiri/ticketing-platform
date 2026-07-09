@@ -30,9 +30,14 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     container_name: ticketing-rabbitmq
+    environment:
+      # Explicit user: RabbitMQ restricts the built-in 'guest' account to loopback, and a
+      # Docker port-proxied connection does not qualify. Same creds in appsettings.json.
+      RABBITMQ_DEFAULT_USER: ticketing
+      RABBITMQ_DEFAULT_PASS: ticketing
     ports:
       - "5672:5672"     # AMQP
-      - "15672:15672"   # management UI (guest/guest)
+      - "15672:15672"   # management UI (ticketing/ticketing)
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s

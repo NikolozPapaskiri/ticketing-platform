@@ -13,23 +13,20 @@ namespace TicketingPlatform.Application.Services;
 /// </summary>
 public sealed class HoldService
 {
-    /// <summary>
-    /// How long a hold reserves inventory before the expiry background service reclaims it.
-    /// Constant for now; becomes per-tenant configuration when tenants get settings.
-    /// </summary>
-    public static readonly TimeSpan HoldTtl = TimeSpan.FromMinutes(10);
-
     private readonly IHoldRepository _holds;
     private readonly IReservationStrategy _reservation;
     private readonly ICacheService _cache;
+    private readonly HoldOptions _options;
     private readonly TimeProvider _clock;
 
-    public HoldService(IHoldRepository holds, IReservationStrategy reservation, ICacheService cache, TimeProvider clock)
+    public HoldService(IHoldRepository holds, IReservationStrategy reservation, ICacheService cache,
+        HoldOptions options, TimeProvider clock)
     {
         _holds = holds;
         _reservation = reservation;
         _cache = cache;
-        _clock = clock; // injected clock keeps the TTL testable (FakeTimeProvider in tests)
+        _options = options; // TTL from the "Holds" config section
+        _clock = clock;     // injected clock keeps the TTL testable (FakeTimeProvider in tests)
     }
 
     public async Task<Result<HoldResponse>> CreateAsync(Guid tenantId, CreateHoldRequest request, CancellationToken ct)
@@ -48,7 +45,7 @@ public sealed class HoldService
             TicketTypeId = request.TicketTypeId,
             Quantity = request.Quantity,
             CreatedAt = now,
-            ExpiresAt = now.Add(HoldTtl)
+            ExpiresAt = now.Add(_options.Ttl)
         };
 
         // The contention-safe part. Insufficient stock (or a lost race) comes back as Conflict.

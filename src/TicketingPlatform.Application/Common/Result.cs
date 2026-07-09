@@ -5,7 +5,8 @@ public enum ResultError
     None,
     NotFound,
     Conflict,
-    Unauthorized
+    Unauthorized,
+    Unavailable   // an upstream dependency (payment provider) is down: maps to 503, retry later
 }
 
 /// <summary>
@@ -30,6 +31,8 @@ public sealed class Result<T>
     // Deliberately vague message ("Invalid credentials"), never "wrong password" vs "no such
     // user" - that distinction is an account-enumeration oracle.
     public static Result<T> Unauthorized(string message) => new(false, default, ResultError.Unauthorized, message);
+
+    public static Result<T> Unavailable(string message) => new(false, default, ResultError.Unavailable, message);
 }
 
 /// <summary>Outcome of a use case with no return value (e.g. a state transition).</summary>

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Testcontainers.PostgreSql;
+using Testcontainers.RabbitMq;
 using Testcontainers.Redis;
 using TicketingPlatform.Infrastructure.Persistence;
 using WireMock.Server;
@@ -10,16 +11,22 @@ using WireMock.Server;
 namespace TicketingPlatform.IntegrationTests;
 
 /// <summary>
-/// Boots the real API in-memory against real infrastructure: a throwaway PostgreSQL 17
-/// container, a throwaway Redis 7 container, and a WireMock server standing in for the payment
-/// provider (so tests can script provider failures - 500s, declines - deterministically).
-/// One set per test run (collection fixture); tests keep themselves independent by creating
-/// uniquely-named tenants/users.
+/// Boots the real API in-memory against real infrastructure: throwaway PostgreSQL 17, Redis 7,
+/// and RabbitMQ containers, plus a WireMock server standing in for the payment provider (so
+/// tests can script provider failures deterministically). One set per test run (collection
+/// fixture); tests keep themselves independent by creating uniquely-named tenants/users.
+/// Unsealed on purpose: ExpiryTests subclasses it with a short hold TTL.
 /// </summary>
-public sealed class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
+public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17").Build();
     private readonly RedisContainer _redis = new RedisBuilder("redis:7").Build();
+    // Explicit credentials: the module's default is NOT guest/guest, and RabbitMQ restricts
+    // the literal 'guest' user to loopback (a Docker port-proxy connection does not qualify).
+    private readonly RabbitMqContainer _rabbit = new RabbitMqBuilder("rabbitmq:3-management")
+        .WithUsername("ticketing")
+        .WithPassword("ticketing")
+        .Build();
 
     /// <summary>Scriptable payment provider. Tests reset + stub it per scenario.</summary>
     public WireMockServer PaymentProvider { get; } = WireMockServer.Start();
@@ -29,6 +36,10 @@ public sealed class TicketingApiFactory : WebApplicationFactory<Program>, IAsync
         // Swap external endpoints before the host builds; everything else is production wiring.
         builder.UseSetting("ConnectionStrings:Default", _postgres.GetConnectionString());
         builder.UseSetting("ConnectionStrings:Redis", _redis.GetConnectionString());
+        builder.UseSetting("RabbitMq:HostName", _rabbit.Hostname);
+        builder.UseSetting("RabbitMq:Port", _rabbit.GetMappedPublicPort(5672).ToString());
+        builder.UseSetting("RabbitMq:UserName", "ticketing");
+        builder.UseSetting("RabbitMq:Password", "ticketing");
         builder.UseSetting("PaymentProvider:BaseUrl", PaymentProvider.Urls[0] + "/");
         builder.UseSetting("PaymentProvider:RetryBaseDelayMs", "50"); // fast retry storms in tests
         builder.UseEnvironment("Development");
@@ -36,7 +47,7 @@ public sealed class TicketingApiFactory : WebApplicationFactory<Program>, IAsync
 
     async Task IAsyncLifetime.InitializeAsync()
     {
-        await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync());
+        await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync(), _rabbit.StartAsync());
 
         // Touching Services builds the host, which (Development) migrates + seeds the admin.
         using var scope = Services.CreateScope();
@@ -47,7 +58,10 @@ public sealed class TicketingApiFactory : WebApplicationFactory<Program>, IAsync
     {
         await base.DisposeAsync();
         PaymentProvider.Stop();
-        await Task.WhenAll(_postgres.DisposeAsync().AsTask(), _redis.DisposeAsync().AsTask());
+        await Task.WhenAll(
+            _postgres.DisposeAsync().AsTask(),
+            _redis.DisposeAsync().AsTask(),
+            _rabbit.DisposeAsync().AsTask());
     }
 }
 

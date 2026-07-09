@@ -43,6 +43,16 @@ public record HoldResponse(
     string Status,
     DateTimeOffset ExpiresAt);
 
+// Order (the booking saga)
+public record CreateOrderRequest(Guid HoldId, string CustomerEmail);
+public record OrderResponse(
+    Guid Id,
+    Guid HoldId,
+    string CustomerEmail,
+    decimal Amount,
+    string Currency,
+    string Status);
+
 public record PagedResponse<T>(
     IReadOnlyList<T> Items,
     int PageNumber,
