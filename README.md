@@ -175,6 +175,9 @@ bottom:
 | POST | `/api/v1/holds/{id}/release` | give the quantity back; double release → 409 |
 | POST | `/api/v1/orders` | the booking saga: charge the hold, confirm; declined → 409, provider down → 503 |
 | GET | `/api/v1/orders/{id}` | inspect an order |
+| GET | `/api/v1/orders/{id}/ticket` | download the issued ticket PDF (404 until the async issuer produces it) |
+| GET | `/api/v1/events/{id}/availability` | CQRS read model: live availability off the contested write path |
+| GET | `/api/v1/events/{id}/sales-report` | vertical-slice feature: confirmed-sales aggregate |
 | POST | `/api/v1/auth/register` · `/login` · `/refresh` | customer signup, login, refresh-token rotation |
 | POST | `/api/v1/auth/register-staff` | admin-only staff/admin provisioning |
 
@@ -204,6 +207,10 @@ wrong role → 403, cross-tenant → 404. All errors are RFC 7807.
   probes; GitHub Actions CI (all tests + GHCR image); Kubernetes manifests (2 API replicas,
   readiness/liveness, resources); per-IP auth rate limiting; graceful shutdown; OpenTelemetry
   traces + metrics with trace propagation across the RabbitMQ hop.
-- **Now (Phase 7):** SignalR live availability + CQRS read models, ticket PDFs, vertical-slice
-  set piece, architecture write-ups (Clean vs Vertical Slice, monolith vs microservices).
-  Tag `v3-production` at the end.
+- **Done (Phase 7):** SignalR live availability + Redis backplane; CQRS availability read model;
+  async ticket-PDF issuing (QuestPDF, fan-out consumer, file-storage port); the event sales
+  report as a vertical slice; the architecture write-ups in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+  (Clean vs Vertical Slice, monolith vs microservices, every key decision with its trade-off).
+
+The full architecture rationale — the interview-ready version — lives in
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
