@@ -26,6 +26,14 @@ public record TicketTypeResponse(
     int TotalQuantity,
     int AvailableQuantity);
 
+// Auth
+public record RegisterRequest(string Email, string Password);
+public record RegisterStaffRequest(string Email, string Password, string Role, Guid? TenantId);
+public record LoginRequest(string Email, string Password);
+public record RefreshRequest(string RefreshToken);
+public record AuthResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAt, string RefreshToken);
+public record UserResponse(Guid Id, string Email, string Role, Guid? TenantId);
+
 // Hold
 public record CreateHoldRequest(Guid TicketTypeId, int Quantity);
 public record HoldResponse(

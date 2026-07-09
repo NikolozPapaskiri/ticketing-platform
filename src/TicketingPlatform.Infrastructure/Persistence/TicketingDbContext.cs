@@ -25,6 +25,8 @@ public class TicketingDbContext : DbContext
     public DbSet<TicketType> TicketTypes => Set<TicketType>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
     public DbSet<Hold> Holds => Set<Hold>();
+    public DbSet<User> Users => Set<User>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -106,6 +108,31 @@ public class TicketingDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             b.HasQueryFilter(h => h.TenantId == CurrentTenantId);
+        });
+
+        // Users are NOT tenant-filtered: login happens before a tenant is known, and customers
+        // and platform admins have no tenant at all. Staff's tenant boundary is the tenant_id
+        // claim in their JWT, not a filter here.
+        modelBuilder.Entity<User>(b =>
+        {
+            b.HasKey(u => u.Id);
+            b.Property(u => u.Email).IsRequired().HasMaxLength(256);
+            b.Property(u => u.NormalizedEmail).IsRequired().HasMaxLength(256);
+            b.Property(u => u.PasswordHash).IsRequired();
+            b.Property(u => u.Role).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(u => u.NormalizedEmail).IsUnique(); // one account per email, platform-wide
+        });
+
+        modelBuilder.Entity<RefreshToken>(b =>
+        {
+            b.HasKey(t => t.Id);
+            b.Property(t => t.TokenHash).IsRequired().HasMaxLength(64); // SHA-256 hex
+            b.HasIndex(t => t.TokenHash).IsUnique();                    // hash-based lookup path
+            b.HasIndex(t => t.UserId);                                  // family revocation path
+            b.HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

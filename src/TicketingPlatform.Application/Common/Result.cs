@@ -4,7 +4,8 @@ public enum ResultError
 {
     None,
     NotFound,
-    Conflict
+    Conflict,
+    Unauthorized
 }
 
 /// <summary>
@@ -25,6 +26,10 @@ public sealed class Result<T>
     public static Result<T> Success(T value) => new(true, value, ResultError.None, null);
     public static Result<T> NotFound(string message) => new(false, default, ResultError.NotFound, message);
     public static Result<T> Conflict(string message) => new(false, default, ResultError.Conflict, message);
+
+    // Deliberately vague message ("Invalid credentials"), never "wrong password" vs "no such
+    // user" - that distinction is an account-enumeration oracle.
+    public static Result<T> Unauthorized(string message) => new(false, default, ResultError.Unauthorized, message);
 }
 
 /// <summary>Outcome of a use case with no return value (e.g. a state transition).</summary>

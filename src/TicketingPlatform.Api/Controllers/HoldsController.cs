@@ -1,6 +1,7 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using TicketingPlatform.Api.Tenancy;
+using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Contracts;
@@ -9,11 +10,13 @@ using TicketingPlatform.Application.Services;
 namespace TicketingPlatform.Api.Controllers;
 
 /// <summary>
-/// Tenant-scoped hold (TTL reservation) operations. Thin: HTTP guards + Result mapping only;
-/// the reservation math lives in the domain, the orchestration in HoldService.
+/// Tenant-scoped hold (TTL reservation) operations - the organizer back-office path for now
+/// (box-office reservations); the customer purchase flow arrives with the Phase 5 booking saga.
+/// Thin: HTTP guards + Result mapping only.
 /// </summary>
 [ApiController]
 [ApiVersion("1.0")]
+[Authorize(Policy = AuthPolicies.OrganizerStaff)]
 [Route("api/v{version:apiVersion}/holds")]
 public class HoldsController : ControllerBase
 {
@@ -72,9 +75,10 @@ public class HoldsController : ControllerBase
         };
     }
 
+    // Defense-in-depth: the OrganizerStaff policy already requires a tenant claim.
     private ObjectResult MissingTenant() =>
         Problem(
             statusCode: StatusCodes.Status400BadRequest,
             title: "Missing tenant",
-            detail: $"The '{TenantResolutionMiddleware.TenantHeader}' header is required for this operation.");
+            detail: "This operation requires a token carrying a tenant claim (organizer staff).");
 }

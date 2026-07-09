@@ -11,6 +11,7 @@ public interface ITenantRepository
 {
     Task<IReadOnlyList<Tenant>> ListAsync(CancellationToken ct);
     Task<bool> SlugExistsAsync(string slug, CancellationToken ct);
+    Task<bool> ExistsAsync(Guid id, CancellationToken ct);
     void Add(Tenant tenant);
     Task SaveChangesAsync(CancellationToken ct);
 }

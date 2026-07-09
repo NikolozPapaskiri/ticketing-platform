@@ -1,99 +1,108 @@
 @host = http://localhost:5000/api/v1
 
-### 1. Create tenant A (Aurora Live). Copy the returned "id" into @tenantA below.
+### ============ AUTH (Phase 3): the tenant comes from the token now ============
+
+### 1. Login as the dev-seeded platform admin. Copy "accessToken" into @adminToken below.
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{ "email": "admin@platform.local", "password": "Admin123$" }
+
+### ---- paste tokens as you collect them ----
+@adminToken = PASTE_ADMIN_ACCESS_TOKEN
+@staffAToken = PASTE_STAFF_A_ACCESS_TOKEN
+@staffBToken = PASTE_STAFF_B_ACCESS_TOKEN
+
+### 2. Admin creates tenant A. Copy the returned "id" into @tenantA.
 POST {{host}}/tenants
 Content-Type: application/json
+Authorization: Bearer {{adminToken}}
 
 { "name": "Aurora Live", "slug": "aurora-live" }
 
-### 2. Create tenant B (Vortex Events). Copy the returned "id" into @tenantB below.
+### 3. Admin creates tenant B. Copy the returned "id" into @tenantB.
 POST {{host}}/tenants
 Content-Type: application/json
+Authorization: Bearer {{adminToken}}
 
 { "name": "Vortex Events", "slug": "vortex-events" }
 
-### 3. List all tenants (admin view, no tenant header required)
-GET {{host}}/tenants
+@tenantA = PASTE_TENANT_A_ID
+@tenantB = PASTE_TENANT_B_ID
 
-### ---- paste the two ids from steps 1 and 2 ----
-@tenantA = 22672e8b-86fb-4837-9572-af59f1b9ae45
-@tenantB = 022c8a1c-ca0f-4c6c-9ee4-4751c1c215dd
+### 4. Admin provisions staff for tenant A, then B (change email/tenantId).
+POST {{host}}/auth/register-staff
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
 
-### 4. Create an event under tenant A. Copy the returned "id" into @eventA below.
+{ "email": "staff-a@aurora.local", "password": "Staff123$", "role": "OrganizerStaff", "tenantId": "{{tenantA}}" }
+
+### 5. Staff A logs in -> copy accessToken into @staffAToken. (Decode it at jwt.io: note the tenant_id claim.)
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{ "email": "staff-a@aurora.local", "password": "Staff123$" }
+
+### ============ EVENTS: no tenant header anywhere - the claim drives everything ============
+
+### 6. Staff A creates an event. Copy id into @eventA.
 POST {{host}}/events
 Content-Type: application/json
-X-Tenant-Id: {{tenantA}}
+Authorization: Bearer {{staffAToken}}
 
-{ "name": "Aurora Summer Fest", "description": "Open air festival", "venueName": "Riverside Park", "startsAt": "2026-07-01T20:00:00Z" }
+{ "name": "Aurora Summer Fest", "venueName": "Riverside Park", "startsAt": "2027-07-01T20:00:00Z" }
 
-### 5. Create an event under tenant B
-POST {{host}}/events
-Content-Type: application/json
-X-Tenant-Id: {{tenantB}}
+@eventA = PASTE_EVENT_A_ID
 
-{ "name": "Vortex Night", "venueName": "Hall 9", "startsAt": "2026-08-15T21:00:00Z" }
+### 7. Publish it (Draft -> OnSale). Run again to see the 409 state-machine rejection.
+POST {{host}}/events/{{eventA}}/publish
+Authorization: Bearer {{staffAToken}}
 
-### 6. List events as tenant A -> only Aurora's event (the global query filter at work)
-GET {{host}}/events
-X-Tenant-Id: {{tenantA}}
-
-### 7. List events as tenant B -> only Vortex's event
-GET {{host}}/events
-X-Tenant-Id: {{tenantB}}
-
-### 8. List events with NO tenant header -> 400 (tenant required)
-GET {{host}}/events
-
-### ---- paste the event id from step 4 ----
-@eventA = 497bb046-bf73-44ed-a5af-916c83d49c1f
-
-### 9. Add a ticket type + inventory to tenant A's event
+### 8. Add a ticket type + inventory. Copy the ticket type id into @ticketTypeA.
 POST {{host}}/events/{{eventA}}/ticket-types
 Content-Type: application/json
-X-Tenant-Id: {{tenantA}}
+Authorization: Bearer {{staffAToken}}
 
 { "name": "General Admission", "price": 49.90, "currency": "EUR", "totalQuantity": 500 }
 
-### 10. Get the full event (with ticket types) as tenant A
+@ticketTypeA = PASTE_TICKET_TYPE_ID
+
+### 9. THE ISOLATION KICKER: staff B (valid token, wrong tenant) reads A's event -> 404.
 GET {{host}}/events/{{eventA}}
-X-Tenant-Id: {{tenantA}}
+Authorization: Bearer {{staffBToken}}
 
-### 11. Cross-tenant check: read tenant A's event while sending tenant B's header -> 404 (filtered out)
+### 10. Anonymous -> 401. Customer token on staff endpoints -> 403.
+GET {{host}}/events
+
+### ============ HOLDS: TTL inventory reservation ============
+
+### 11. Reserve 3 tickets (watch availableQuantity drop in step 12). Copy hold id into @holdA.
+POST {{host}}/holds
+Content-Type: application/json
+Authorization: Bearer {{staffAToken}}
+
+{ "ticketTypeId": "{{ticketTypeA}}", "quantity": 3 }
+
+@holdA = PASTE_HOLD_ID
+
+### 12. Event graph shows live availability.
 GET {{host}}/events/{{eventA}}
-X-Tenant-Id: {{tenantB}}
+Authorization: Bearer {{staffAToken}}
 
-### 12. Publish event A (Draft -> OnSale) -> 204
-POST {{host}}/events/{{eventA}}/publish
-X-Tenant-Id: {{tenantA}}
+### 13. Release the hold (run twice: second time is a 409 - no double refund).
+POST {{host}}/holds/{{holdA}}/release
+Authorization: Bearer {{staffAToken}}
 
-### 13. Publish again (OnSale -> OnSale is illegal) -> 409 Conflict
-POST {{host}}/events/{{eventA}}/publish
-X-Tenant-Id: {{tenantA}}
+### ============ TOKEN LIFECYCLE ============
 
-### 14. Close event A (OnSale -> Closed) -> 204
-POST {{host}}/events/{{eventA}}/close
-X-Tenant-Id: {{tenantA}}
+### 14. Refresh (paste the refreshToken from any login). Then REPLAY the same value: 401 + family revoked.
+POST {{host}}/auth/refresh
+Content-Type: application/json
 
-### 15. Publish the closed event (Closed is terminal) -> 409 Conflict
-POST {{host}}/events/{{eventA}}/publish
-X-Tenant-Id: {{tenantA}}
+{ "refreshToken": "PASTE_REFRESH_TOKEN" }
 
-### 16. Cross-tenant: publish A's event as tenant B -> 404 (filtered, NOT 409)
-POST {{host}}/events/{{eventA}}/publish
-X-Tenant-Id: {{tenantB}}
+### 15. Customer self-registration (always Customer role - try it on staff endpoints for a 403).
+POST {{host}}/auth/register
+Content-Type: application/json
 
-### 17. Paged + filtered browse -> envelope, only OnSale
-GET {{host}}/events?page=1&pageSize=1&status=OnSale
-X-Tenant-Id: {{tenantA}}
-
-### 18. Clamp check: pageSize over max comes back as 100 in the envelope
-GET {{host}}/events?pageSize=1000000
-X-Tenant-Id: {{tenantA}}
-
-### 19. Invalid page -> 400
-GET {{host}}/events?page=0
-X-Tenant-Id: {{tenantA}}
-
-### 20. Invalid status enum -> 400 (automatic bind failure)
-GET {{host}}/events?status=Banana
-X-Tenant-Id: {{tenantA}}
+{ "email": "buyer@example.com", "password": "Buyer1234$" }

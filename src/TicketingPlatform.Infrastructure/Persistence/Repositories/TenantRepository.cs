@@ -15,6 +15,9 @@ public sealed class TenantRepository : ITenantRepository
     public Task<bool> SlugExistsAsync(string slug, CancellationToken ct) =>
         _db.Tenants.AnyAsync(t => t.Slug == slug, ct);
 
+    public Task<bool> ExistsAsync(Guid id, CancellationToken ct) =>
+        _db.Tenants.AnyAsync(t => t.Id == id, ct);
+
     public void Add(Tenant tenant) => _db.Tenants.Add(tenant);
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);

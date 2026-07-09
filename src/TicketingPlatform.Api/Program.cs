@@ -1,11 +1,21 @@
+using System.Text;
+using Asp.Versioning;
 using FluentValidation;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
+using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Api.Common;
+using TicketingPlatform.Api.Development;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Services;
 using TicketingPlatform.Application.Validation;
+using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure;
-using Asp.Versioning;
+using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,6 +42,44 @@ builder.Services.AddApiVersioning(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
+// --- Authentication: JWT bearer. The API validates issuer, audience, lifetime, and signature
+// on EVERY request; a JWT is signed, not encrypted, so validation is the whole security story.
+var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
+    ?? throw new InvalidOperationException("Missing 'Jwt' configuration section.");
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        // Keep the raw OIDC claim names (sub/role/tenant_id) instead of the legacy
+        // SOAP-era ClaimTypes remapping - explicit beats magic.
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwt.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwt.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30), // default is 5 min - far too generous for 15-min tokens
+            RoleClaimType = "role",
+            NameClaimType = JwtRegisteredClaimNames.Sub
+        };
+    });
+
+// --- Authorization: policy-based. Roles alone are too coarse; the OrganizerStaff policy
+// requires the role AND a tenant claim (a staff token without a tenant is useless by design).
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(AuthPolicies.OrganizerStaff, policy => policy
+        .RequireRole(nameof(UserRole.OrganizerStaff))
+        .RequireClaim(TenantResolutionMiddleware.TenantClaim));
+
+    options.AddPolicy(AuthPolicies.PlatformAdmin, policy => policy
+        .RequireRole(nameof(UserRole.PlatformAdmin)));
+});
+
 // Tenancy: TenantContext is scoped (one per request). It is exposed both as the
 // concrete type (set by the middleware) and as the read-only ITenantContext (read by the DbContext).
 builder.Services.AddScoped<TenantContext>();
@@ -39,14 +87,15 @@ builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantCon
 
 // Validators
 builder.Services.AddValidatorsFromAssemblyContaining<CreateEventRequestValidator>();
-builder.Services.AddSingleton(TimeProvider.System); // real clock in prod; tests pass
+builder.Services.AddSingleton(TimeProvider.System); // real clock in prod; tests pass a fake
 
-builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("Default")!);
+builder.Services.AddInfrastructure(builder.Configuration);
 
-// Application use-case services. Scoped: they hold a scoped repository.
+// Application use-case services. Scoped: they hold scoped repositories.
 builder.Services.AddScoped<TenantService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddScoped<HoldService>();
+builder.Services.AddScoped<AuthService>();
 
 var app = builder.Build();
 
@@ -59,10 +108,22 @@ app.UseExceptionHandler();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi(); // serves /openapi/v1.json
+
+    // Development convenience: migrate + seed the first PlatformAdmin so the closed
+    // provisioning chain (only admins create staff) can start. Production migrates
+    // deliberately (CI/CD step), never implicitly at boot.
+    using (var scope = app.Services.CreateScope())
+    {
+        await scope.ServiceProvider.GetRequiredService<TicketingDbContext>().Database.MigrateAsync();
+    }
+    await DevDataSeeder.SeedAsync(app.Services);
 }
 
-// Resolve the tenant from the X-Tenant-Id header before controllers run.
+// Pipeline order matters: authenticate (who are you) -> resolve tenant FROM the principal's
+// claim -> authorize (are you allowed) -> endpoint.
+app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
+app.UseAuthorization();
 
 app.MapControllers();
 

@@ -1,6 +1,7 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using TicketingPlatform.Api.Tenancy;
+using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Application.Services;
@@ -9,13 +10,14 @@ using TicketingPlatform.Domain;
 namespace TicketingPlatform.Api.Controllers;
 
 /// <summary>
-/// Tenant-scoped event operations. Thin by design: HTTP-shaped guards (missing tenant, page
-/// parameter validation) and Result-to-status mapping live here; querying, the state machine,
-/// and mapping live in EventService. Tenant isolation is enforced by the EF global query filter
-/// inside Infrastructure — no hand-written tenant predicate anywhere.
+/// Tenant-scoped event operations, restricted to organizer staff. The tenant comes from the
+/// caller's signed tenant_id claim (resolved by TenantResolutionMiddleware) - never from the
+/// client directly. Thin by design: HTTP guards + Result-to-status mapping live here;
+/// querying, the state machine, and mapping live in EventService.
 /// </summary>
 [ApiController]
 [ApiVersion("1.0")]
+[Authorize(Policy = AuthPolicies.OrganizerStaff)]
 [Route("api/v{version:apiVersion}/events")]
 public class EventsController : ControllerBase
 {
@@ -119,9 +121,12 @@ public class EventsController : ControllerBase
         };
     }
 
+    // Defense-in-depth: the OrganizerStaff policy already requires a tenant claim, so this
+    // guard should be unreachable. It stays so a future policy change cannot silently produce
+    // tenant-less queries against tenant-filtered tables.
     private ObjectResult MissingTenant() =>
         Problem(
             statusCode: StatusCodes.Status400BadRequest,
             title: "Missing tenant",
-            detail: $"The '{TenantResolutionMiddleware.TenantHeader}' header is required for this operation.");
+            detail: "This operation requires a token carrying a tenant claim (organizer staff).");
 }

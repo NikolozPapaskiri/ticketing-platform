@@ -14,19 +14,19 @@ public class HoldTests
 
     public HoldTests(TicketingApiFactory factory) => _client = factory.CreateClient();
 
-    private async Task<(TenantDto Tenant, EventDto Event, TicketTypeDto TicketType)> SetupInventoryAsync(int capacity)
+    private async Task<(string Staff, EventDto Event, TicketTypeDto TicketType)> SetupInventoryAsync(int capacity)
     {
-        var tenant = await _client.CreateTenantAsync();
-        var ev = await _client.CreateEventAsync(tenant.Id);
-        var response = await _client.PostAsTenantAsync(tenant.Id, $"/api/v1/events/{ev.Id}/ticket-types",
+        var (_, staff) = await _client.CreateTenantWithStaffAsync();
+        var ev = await _client.CreateEventAsync(staff);
+        var response = await _client.PostAsAsync(staff, $"/api/v1/events/{ev.Id}/ticket-types",
             new { name = "GA", price = 10m, currency = "USD", totalQuantity = capacity });
         var tt = (await response.Content.ReadFromJsonAsync<TicketTypeDto>(ApiClientExtensions.Json))!;
-        return (tenant, ev, tt);
+        return (staff, ev, tt);
     }
 
-    private async Task<int> AvailabilityAsync(Guid tenantId, Guid eventId)
+    private async Task<int> AvailabilityAsync(string staff, Guid eventId)
     {
-        var response = await _client.GetAsTenantAsync(tenantId, $"/api/v1/events/{eventId}");
+        var response = await _client.GetAsAsync(staff, $"/api/v1/events/{eventId}");
         var graph = await response.Content.ReadFromJsonAsync<EventDto>(ApiClientExtensions.Json);
         return graph!.TicketTypes.Single().AvailableQuantity;
     }
@@ -34,58 +34,58 @@ public class HoldTests
     [Fact]
     public async Task CreateHold_DecrementsAvailability()
     {
-        var (tenant, ev, tt) = await SetupInventoryAsync(capacity: 50);
+        var (staff, ev, tt) = await SetupInventoryAsync(capacity: 50);
 
-        var response = await _client.PostAsTenantAsync(tenant.Id, "/api/v1/holds",
+        var response = await _client.PostAsAsync(staff, "/api/v1/holds",
             new { ticketTypeId = tt.Id, quantity = 8 });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var hold = await response.Content.ReadFromJsonAsync<HoldDto>(ApiClientExtensions.Json);
         Assert.Equal("Active", hold!.Status);
         Assert.True(hold.ExpiresAt > DateTimeOffset.UtcNow); // TTL stamped
-        Assert.Equal(42, await AvailabilityAsync(tenant.Id, ev.Id));
+        Assert.Equal(42, await AvailabilityAsync(staff, ev.Id));
     }
 
     [Fact]
     public async Task CreateHold_MoreThanAvailable_Returns409_AndStockUntouched()
     {
-        var (tenant, ev, tt) = await SetupInventoryAsync(capacity: 5);
+        var (staff, ev, tt) = await SetupInventoryAsync(capacity: 5);
 
-        var response = await _client.PostAsTenantAsync(tenant.Id, "/api/v1/holds",
+        var response = await _client.PostAsAsync(staff, "/api/v1/holds",
             new { ticketTypeId = tt.Id, quantity = 6 });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDto>(ApiClientExtensions.Json);
         Assert.Equal("Insufficient availability", problem!.Title);
         Assert.Contains("only 5 available", problem.Detail);
-        Assert.Equal(5, await AvailabilityAsync(tenant.Id, ev.Id)); // rejected reserve is a no-op
+        Assert.Equal(5, await AvailabilityAsync(staff, ev.Id)); // rejected reserve is a no-op
     }
 
     [Fact]
     public async Task ReleaseHold_RestoresAvailability_ExactlyOnce()
     {
-        var (tenant, ev, tt) = await SetupInventoryAsync(capacity: 20);
-        var create = await _client.PostAsTenantAsync(tenant.Id, "/api/v1/holds",
+        var (staff, ev, tt) = await SetupInventoryAsync(capacity: 20);
+        var create = await _client.PostAsAsync(staff, "/api/v1/holds",
             new { ticketTypeId = tt.Id, quantity = 4 });
         var hold = await create.Content.ReadFromJsonAsync<HoldDto>(ApiClientExtensions.Json);
-        Assert.Equal(16, await AvailabilityAsync(tenant.Id, ev.Id));
+        Assert.Equal(16, await AvailabilityAsync(staff, ev.Id));
 
-        var release = await _client.PostAsTenantAsync(tenant.Id, $"/api/v1/holds/{hold!.Id}/release");
+        var release = await _client.PostAsAsync(staff, $"/api/v1/holds/{hold!.Id}/release");
         Assert.Equal(HttpStatusCode.NoContent, release.StatusCode);
-        Assert.Equal(20, await AvailabilityAsync(tenant.Id, ev.Id));
+        Assert.Equal(20, await AvailabilityAsync(staff, ev.Id));
 
         // Releasing again is a state conflict and must not mint extra stock.
-        var again = await _client.PostAsTenantAsync(tenant.Id, $"/api/v1/holds/{hold.Id}/release");
+        var again = await _client.PostAsAsync(staff, $"/api/v1/holds/{hold.Id}/release");
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
-        Assert.Equal(20, await AvailabilityAsync(tenant.Id, ev.Id));
+        Assert.Equal(20, await AvailabilityAsync(staff, ev.Id));
     }
 
     [Fact]
     public async Task CreateHold_UnknownTicketType_Returns404()
     {
-        var tenant = await _client.CreateTenantAsync();
+        var (_, staff) = await _client.CreateTenantWithStaffAsync();
 
-        var response = await _client.PostAsTenantAsync(tenant.Id, "/api/v1/holds",
+        var response = await _client.PostAsAsync(staff, "/api/v1/holds",
             new { ticketTypeId = Guid.NewGuid(), quantity = 1 });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -94,11 +94,11 @@ public class HoldTests
     [Fact]
     public async Task CreateHold_ForeignTenantsTicketType_Returns404()
     {
-        var (tenantA, _, tt) = await SetupInventoryAsync(capacity: 10);
-        var tenantB = await _client.CreateTenantAsync();
+        var (_, _, tt) = await SetupInventoryAsync(capacity: 10);
+        var (_, staffB) = await _client.CreateTenantWithStaffAsync();
 
-        // Tenant B cannot reserve tenant A's inventory - invisible, so 404 (not 403).
-        var response = await _client.PostAsTenantAsync(tenantB.Id, "/api/v1/holds",
+        // Tenant B's staff cannot reserve tenant A's inventory - invisible, so 404 (not 403).
+        var response = await _client.PostAsAsync(staffB, "/api/v1/holds",
             new { ticketTypeId = tt.Id, quantity = 1 });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -107,9 +107,9 @@ public class HoldTests
     [Fact]
     public async Task CreateHold_ZeroQuantity_Returns400Validation()
     {
-        var (tenant, _, tt) = await SetupInventoryAsync(capacity: 10);
+        var (staff, _, tt) = await SetupInventoryAsync(capacity: 10);
 
-        var response = await _client.PostAsTenantAsync(tenant.Id, "/api/v1/holds",
+        var response = await _client.PostAsAsync(staff, "/api/v1/holds",
             new { ticketTypeId = tt.Id, quantity = 0 });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

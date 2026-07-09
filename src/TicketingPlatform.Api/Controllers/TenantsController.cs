@@ -1,17 +1,20 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Application.Services;
+using TicketingPlatform.Domain;
 
 namespace TicketingPlatform.Api.Controllers;
 
 /// <summary>
-/// Platform-admin operations on tenants. Tenant is not tenant-scoped, so these endpoints work
-/// without an X-Tenant-Id header. In Phase 3 they are restricted to the platform-admin role.
+/// Platform-admin operations on tenants: creating/listing tenants is running the platform
+/// itself, so it requires the PlatformAdmin role (no tenant claim - admins are tenant-less).
 /// Thin by design: delegates to TenantService and maps Results to HTTP. No EF here.
 /// </summary>
 [ApiController]
 [ApiVersion("1.0")]
+[Authorize(Roles = nameof(UserRole.PlatformAdmin))]
 [Route("api/v{version:apiVersion}/tenants")]
 public class TenantsController : ControllerBase
 {

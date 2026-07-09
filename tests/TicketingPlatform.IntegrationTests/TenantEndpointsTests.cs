@@ -11,11 +11,12 @@ public class TenantEndpointsTests
     public TenantEndpointsTests(TicketingApiFactory factory) => _client = factory.CreateClient();
 
     [Fact]
-    public async Task Create_ReturnsCreatedTenant()
+    public async Task Create_AsAdmin_ReturnsCreatedTenant()
     {
+        var adminToken = await _client.LoginAsAdminAsync();
         var slug = $"t-{Guid.NewGuid():N}";
 
-        var response = await _client.PostAsJsonAsync("/api/v1/tenants", new { name = "Acme", slug });
+        var response = await _client.PostAsAsync(adminToken, "/api/v1/tenants", new { name = "Acme", slug });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var tenant = await response.Content.ReadFromJsonAsync<TenantDto>(ApiClientExtensions.Json);
@@ -25,10 +26,11 @@ public class TenantEndpointsTests
     [Fact]
     public async Task Create_DuplicateSlug_Returns409Problem()
     {
-        var tenant = await _client.CreateTenantAsync();
+        var adminToken = await _client.LoginAsAdminAsync();
+        var tenant = await _client.CreateTenantAsync(adminToken);
 
         // The service pre-checks, but the DB unique index is the authoritative guard.
-        var response = await _client.PostAsJsonAsync("/api/v1/tenants", new { name = "Copycat", slug = tenant.Slug });
+        var response = await _client.PostAsAsync(adminToken, "/api/v1/tenants", new { name = "Copycat", slug = tenant.Slug });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDto>(ApiClientExtensions.Json);
@@ -40,19 +42,30 @@ public class TenantEndpointsTests
     [Fact]
     public async Task Create_InvalidSlug_Returns400()
     {
-        var response = await _client.PostAsJsonAsync("/api/v1/tenants", new { name = "Bad", slug = "Not A Slug!" });
+        var adminToken = await _client.LoginAsAdminAsync();
+
+        var response = await _client.PostAsAsync(adminToken, "/api/v1/tenants", new { name = "Bad", slug = "Not A Slug!" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task List_ReturnsCreatedTenants_WithoutTenantHeader()
+    public async Task List_AsAdmin_ReturnsCreatedTenants()
     {
-        // Tenants are the top-level owners: the admin list needs no X-Tenant-Id.
-        var created = await _client.CreateTenantAsync();
+        var adminToken = await _client.LoginAsAdminAsync();
+        var created = await _client.CreateTenantAsync(adminToken);
 
-        var tenants = await _client.GetFromJsonAsync<List<TenantDto>>("/api/v1/tenants", ApiClientExtensions.Json);
+        var response = await _client.GetAsAsync(adminToken, "/api/v1/tenants");
+        var tenants = await response.Content.ReadFromJsonAsync<List<TenantDto>>(ApiClientExtensions.Json);
 
         Assert.Contains(tenants!, t => t.Id == created.Id);
+    }
+
+    [Fact]
+    public async Task Tenants_WithoutToken_Returns401()
+    {
+        var response = await _client.GetAsync("/api/v1/tenants");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }
