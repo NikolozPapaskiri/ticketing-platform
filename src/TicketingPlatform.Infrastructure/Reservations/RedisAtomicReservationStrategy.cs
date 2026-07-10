@@ -59,10 +59,30 @@ public sealed class RedisAtomicReservationStrategy : IReservationStrategy
 
         try
         {
-            // Winner: persist to the source of truth (drift window starts here - see class docs).
-            inventory.AvailableQuantity -= hold.Quantity;
+            // Winner: mirror the decrement into the source of truth (drift window starts here -
+            // see class docs). ExecuteUpdate issues one atomic "SET available = available - N"
+            // and deliberately bypasses the xmin token: Redis already arbitrated who wins, so
+            // winners must not fight each other over stale row versions here (with the tracked-
+            // entity approach every concurrent winner but one threw DbUpdateConcurrencyException
+            // - surfaced as 500s by the flash-sale load test). Guarded and transactional with
+            // the hold insert so a DB that disagrees with Redis still cannot oversell.
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+            var updated = await _db.Inventories
+                .Where(i => i.Id == inventory.Id && i.AvailableQuantity >= hold.Quantity)
+                .ExecuteUpdateAsync(s => s.SetProperty(
+                    i => i.AvailableQuantity, i => i.AvailableQuantity - hold.Quantity), ct);
+            if (updated == 0)
+            {
+                // Redis let us through but the DB has no stock: the counter drifted. The DB is
+                // the source of truth - reject and pull the counter back down to reality.
+                await tx.RollbackAsync(ct);
+                await redis.StringIncrementAsync(key, hold.Quantity);
+                return Result.Conflict($"Cannot hold {hold.Quantity} tickets; none available.");
+            }
+
             _db.Holds.Add(hold);
             await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Result.Success();
         }
         catch

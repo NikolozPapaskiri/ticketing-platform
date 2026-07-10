@@ -510,8 +510,12 @@ This block supersedes older phase-progress lines above if they disagree.
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
   `COOKIE_SECURE=false`; production HTTPS should keep secure cookies enabled.
-- Remaining planned work: a load test comparing the three reservation strategies (next up),
-  then mock-interview reps; optional depth such as reserved seating or Elasticsearch search.
+- Flash-sale load test done (tools/TicketingPlatform.LoadTest, results in docs/LOAD_TEST.md):
+  all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
+  RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
+  ExecuteUpdate in the hold-insert transaction).
+- Remaining planned work: mock-interview reps; optional depth such as reserved seating or
+  Elasticsearch search.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

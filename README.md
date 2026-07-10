@@ -28,6 +28,9 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
   M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
   position pushes, 429-enforced checkout on gated events).
 - Current verified backend suite: 129 tests (60 unit + 69 integration).
+- The three oversell-prevention strategies are load-tested head-to-head under flash-sale
+  concurrency — zero oversell across all three; numbers and analysis in
+  [docs/LOAD_TEST.md](docs/LOAD_TEST.md).
 - Current verified frontend checks: typecheck, lint, production build, npm audit, and the
   Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the
