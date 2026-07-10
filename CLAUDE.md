@@ -495,7 +495,7 @@ npm.cmd run dev
 - **Historical roadmap note:** the backend production path listed here is complete; use Latest status below for current work.
 - **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 
-## Latest status - 2026-07-10
+## Latest status - 2026-07-11
 
 This block supersedes older phase-progress lines above if they disagree.
 
@@ -528,8 +528,9 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Remaining planned work: mock-interview reps; optional future depth such as reserved seating
-  or Elasticsearch search.
+- Immediate planned work: execute `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`, starting with the
+  durable payment state machine and deterministic race tests. Mock-interview reps follow the
+  safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

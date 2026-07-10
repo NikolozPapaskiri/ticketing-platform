@@ -251,6 +251,11 @@ wrong role → 403, cross-tenant → 404. All errors are RFC 7807.
 
 ## Roadmap (staged; tags mark milestones)
 
+The next active milestone is failure-window hardening across payment, idempotency, atomic state
+transitions, RabbitMQ delivery, and the virtual waiting room. The test-first PR sequence and
+completion gates are documented in
+**[docs/PRODUCTION_SAFETY_HARDENING_PLAN.md](docs/PRODUCTION_SAFETY_HARDENING_PLAN.md)**.
+
 - **Done (Phase 2, tag `v2-clean`):** Clean Architecture (use-case services + repository ports,
   thin controllers, Api free of EF), Testcontainers integration tests, the `Hold` TTL
   reservation concept.
