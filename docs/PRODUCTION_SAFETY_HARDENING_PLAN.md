@@ -377,6 +377,23 @@ Required tests for every reservation strategy:
 
 ## PR 3: RabbitMQ publication and consumer reliability
 
+**Status: IN PROGRESS — the P0 (no silent event loss) is DONE** on branch
+`feature/rabbitmq-delivery-safety`: a `RabbitMqTopologyInitializer` declares the exchange, DLX,
+and every consumer queue + binding as a plain `IHostedService` whose `StartAsync` completes
+BEFORE the dispatcher starts (§3.1), and the dispatcher now publishes with **publisher confirms +
+tracking** and `mandatory: true`, marking a row processed only after the broker ACKs and leaving a
+returned/unconfirmed message in the outbox for retry (§3.2). Shared `RabbitMqTopology` is the one
+source of truth; this also fixed a latent bug — `OrderRefunded` had **no binding** and was being
+silently dropped, so it is now routed to `notifications` (which handles both confirm and refund).
+Test `Outbox_UnroutableMessage_RemainsUnprocessed`; 141 tests green.
+
+**Still open (PR 3 tail):** §3.3 bounded transient consumer retries (retry queue with TTL +
+attempt cap before dead-lettering, instead of dead-lettering on the first exception); §3.4
+versioned integration-event envelopes replacing anonymous JSON; and the remaining §3.5 tests
+(`Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage`, `Consumer_TransientFailure_RetriesThen
+Succeeds`, `Consumer_InvalidPayload_DeadLettersWithoutInfiniteLoop`, the duplicate-delivery
+ticket-issuer test, and an explicit topology-ready test).
+
 Suggested branch: `feature/rabbitmq-delivery-safety`
 
 Suggested commits:

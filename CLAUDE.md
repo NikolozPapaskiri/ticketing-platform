@@ -534,9 +534,16 @@ This block supersedes older phase-progress lines above if they disagree.
   scanned ticket is non-refundable** (409). `AddRefundPendingAndTicketConcurrency` migration.
   Next: PR 3 (RabbitMQ
   publisher confirms + topology + bounded retry).
-- Current verification: 140 backend tests (60 unit + 80 integration, incl. 6 waiting-room, 6
-  payment-race/reconciliation, and 5 refund/scan/release across all three reservation strategies),
-  plus frontend typecheck, lint, production build, Playwright e2e (4), and live API smoke.
+- **RabbitMQ delivery safety (hardening plan PR 3) — P0 done, tail open.** A
+  `RabbitMqTopologyInitializer` declares the exchange/DLX/all consumer queues+bindings before the
+  dispatcher starts; the dispatcher publishes with **publisher confirms + tracking** and
+  `mandatory: true`, marking a row processed only after the broker ACKs (an unroutable/unconfirmed
+  message stays in the outbox for retry). Fixed a latent bug: `OrderRefunded` had no binding and
+  was silently dropped — now routed to `notifications`. **Tail:** bounded transient consumer
+  retries (retry queue + TTL + attempt cap before DLQ) and versioned event envelopes.
+- Current verification: 141 backend tests (60 unit + 81 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, 5 refund/scan/release across all strategies, and 1 outbox
+  delivery), plus frontend typecheck, lint, production build, Playwright e2e (4), and live smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need

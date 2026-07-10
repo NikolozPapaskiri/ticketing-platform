@@ -41,6 +41,9 @@ public static class DependencyInjection
         // the dispatcher + consumer + expiry service run as hosted background services.
         services.AddScoped<IOutbox, OutboxWriter>();
         services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
+        // Declare the broker topology BEFORE the dispatcher/consumers start, so no publish can
+        // race ahead of its bindings. Registered first => its StartAsync completes first.
+        services.AddHostedService<RabbitMqTopologyInitializer>();
         services.AddHostedService<OutboxDispatcher>();
         services.AddHostedService<NotificationConsumer>();
         services.AddHostedService<HoldExpiryService>();
