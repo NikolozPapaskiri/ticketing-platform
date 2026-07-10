@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { Calendar, MapPin } from "lucide-react";
 import { getPublicEvent } from "@/lib/server/public-api";
 import { TicketPicker } from "@/components/checkout/ticket-picker";
+import { WaitingRoomGate } from "@/components/checkout/waiting-room-gate";
 
 type PageProps = {
   params: Promise<{ slug: string; eventId: string }>;
@@ -34,7 +35,9 @@ export default async function EventDetailPage({ params }: PageProps) {
           ) : null}
         </div>
       </section>
-      <TicketPicker event={event} tenantSlug={slug} />
+      <WaitingRoomGate eventId={event.id} enabled={event.waitingRoomEnabled}>
+        <TicketPicker event={event} tenantSlug={slug} />
+      </WaitingRoomGate>
     </div>
   );
 }

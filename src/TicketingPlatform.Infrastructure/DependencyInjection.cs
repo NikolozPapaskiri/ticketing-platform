@@ -13,6 +13,7 @@ using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Persistence.Repositories;
 using TicketingPlatform.Infrastructure.Reservations;
 using TicketingPlatform.Infrastructure.Security;
+using TicketingPlatform.Infrastructure.WaitingRoom;
 
 namespace TicketingPlatform.Infrastructure;
 
@@ -86,6 +87,11 @@ public static class DependencyInjection
         // Oversell prevention: pick ONE of the three strategies via configuration.
         // All three ship so they can be compared under load; switch by setting
         // "Reservation:Strategy" to "OptimisticConcurrency" | "PessimisticLock" | "RedisAtomic".
+        // Raw multiplexer (ZADD/ZPOPMIN/DECRBY...) - IDistributedCache is too narrow for the
+        // waiting room and the Redis reservation strategy. One shared connection, lazily opened.
+        services.AddSingleton<IConnectionMultiplexer>(_ =>
+            ConnectionMultiplexer.Connect(configuration.GetConnectionString("Redis")!));
+
         var strategy = configuration["Reservation:Strategy"] ?? "OptimisticConcurrency";
         switch (strategy)
         {
@@ -93,15 +99,17 @@ public static class DependencyInjection
                 services.AddScoped<IReservationStrategy, PessimisticReservationStrategy>();
                 break;
             case "RedisAtomic":
-                // The raw multiplexer (DECRBY/INCRBY/SET NX) - IDistributedCache is too narrow.
-                services.AddSingleton<IConnectionMultiplexer>(_ =>
-                    ConnectionMultiplexer.Connect(configuration.GetConnectionString("Redis")!));
                 services.AddScoped<IReservationStrategy, RedisAtomicReservationStrategy>();
                 break;
             default:
                 services.AddScoped<IReservationStrategy, OptimisticReservationStrategy>();
                 break;
         }
+
+        // Virtual waiting room: Redis-backed line + the admission valve.
+        services.AddSingleton<RedisWaitingRoom>();
+        services.AddSingleton<IWaitingRoom>(sp => sp.GetRequiredService<RedisWaitingRoom>());
+        services.AddHostedService<WaitingRoomAdmitter>();
 
         return services;
     }

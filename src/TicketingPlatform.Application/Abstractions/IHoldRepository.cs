@@ -32,4 +32,4 @@ public interface IHoldRepository
     Task SaveChangesAsync(CancellationToken ct);
 }
 
-public sealed record TicketTypeSaleContext(Guid TenantId, Guid EventId, string EventStatus);
+public sealed record TicketTypeSaleContext(Guid TenantId, Guid EventId, string EventStatus, bool WaitingRoomEnabled);

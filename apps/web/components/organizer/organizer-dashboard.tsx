@@ -38,7 +38,8 @@ function emptyEvent(): EventInput {
     description: "",
     venueName: "",
     startsAt: startsAt.toISOString().slice(0, 16),
-    category: "Other"
+    category: "Other",
+    waitingRoomEnabled: false
   };
 }
 
@@ -108,7 +109,8 @@ export function OrganizerDashboard() {
         description: created.description ?? "",
         venueName: created.venueName ?? "",
         startsAt: new Date(created.startsAt).toISOString().slice(0, 16),
-        category: created.category ?? "Other"
+        category: created.category ?? "Other",
+        waitingRoomEnabled: created.waitingRoomEnabled
       });
       setBoxTicketTypeId(created.ticketTypes[0]?.id ?? "");
       void queryClient.invalidateQueries({ queryKey: ["organizer-events"] });
@@ -123,7 +125,8 @@ export function OrganizerDashboard() {
         description: updated.description ?? "",
         venueName: updated.venueName ?? "",
         startsAt: new Date(updated.startsAt).toISOString().slice(0, 16),
-        category: updated.category ?? "Other"
+        category: updated.category ?? "Other",
+        waitingRoomEnabled: updated.waitingRoomEnabled
       });
       void queryClient.invalidateQueries({ queryKey: ["organizer-events"] });
       void queryClient.invalidateQueries({ queryKey: ["organizer-event", selectedEventId] });
@@ -185,7 +188,8 @@ export function OrganizerDashboard() {
         description: "",
         venueName: item.venueName ?? "",
         startsAt: new Date(item.startsAt).toISOString().slice(0, 16),
-        category: "Other" // list items carry no category; the detail fetch below corrects it
+        category: "Other", // list items carry no category; the detail fetch below corrects it
+        waitingRoomEnabled: false
       });
     }
 
@@ -199,7 +203,8 @@ export function OrganizerDashboard() {
       description: eventDetail.description ?? "",
       venueName: eventDetail.venueName ?? "",
       startsAt: new Date(eventDetail.startsAt).toISOString().slice(0, 16),
-      category: eventDetail.category ?? "Other"
+      category: eventDetail.category ?? "Other",
+      waitingRoomEnabled: eventDetail.waitingRoomEnabled
     });
     setBoxTicketTypeId((current) =>
       current && eventDetail.ticketTypes.some((ticketType) => ticketType.id === current)
@@ -300,6 +305,24 @@ export function OrganizerDashboard() {
                 value={eventForm.description}
                 onChange={(event) => setEventForm((current) => ({ ...current, description: event.target.value }))}
               />
+              <label htmlFor="event-waiting-room" className="flex items-start gap-2.5 rounded-[8px] border border-border bg-muted/50 p-3">
+                <input
+                  id="event-waiting-room"
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-primary"
+                  checked={eventForm.waitingRoomEnabled ?? false}
+                  onChange={(event) =>
+                    setEventForm((current) => ({ ...current, waitingRoomEnabled: event.target.checked }))
+                  }
+                />
+                <span className="text-sm">
+                  <span className="font-medium">Virtual waiting room</span>
+                  <span className="block text-muted-foreground">
+                    For high-demand on-sales: buyers queue and are admitted at a steady rate instead of
+                    stampeding checkout.
+                  </span>
+                </span>
+              </label>
               {canEdit ? (
                 <>
                   <Label htmlFor="event-image">Marketplace image (JPEG/PNG/WebP, max 2 MB)</Label>

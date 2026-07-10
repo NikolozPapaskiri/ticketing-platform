@@ -5,6 +5,7 @@ import type {
   Hold,
   Order,
   PagedResponse,
+  QueueStatus,
   SalesReport,
   Tenant,
   TicketAvailability,
@@ -75,8 +76,41 @@ export function listHolds() {
   return bff<Hold[]>("/customer/holds");
 }
 
+/**
+ * Anonymous browser identity for the waiting room. Lives in localStorage so a page refresh
+ * (or a dropped SignalR connection) never loses the visitor's place in line.
+ */
+export function getVisitorId(): string {
+  const key = "ticketing_visitor_id";
+  let visitorId = window.localStorage.getItem(key);
+  if (!visitorId) {
+    visitorId = crypto.randomUUID();
+    window.localStorage.setItem(key, visitorId);
+  }
+  return visitorId;
+}
+
 export function createHold(input: { ticketTypeId: string; quantity: number }) {
-  return bff<Hold>("/customer/holds", { method: "POST", body: JSON.stringify(input) });
+  // Always attach the visitor id: for waiting-room events the API requires it (429 otherwise),
+  // for everything else it is ignored.
+  return bff<Hold>("/customer/holds", {
+    method: "POST",
+    headers: { "X-Visitor-Id": getVisitorId() },
+    body: JSON.stringify(input)
+  });
+}
+
+export function joinQueue(eventId: string) {
+  return bff<QueueStatus>(`/public/events/${encodeURIComponent(eventId)}/queue`, {
+    method: "POST",
+    body: JSON.stringify({ visitorId: getVisitorId() })
+  });
+}
+
+export function getQueueStatus(eventId: string) {
+  return bff<QueueStatus>(
+    `/public/events/${encodeURIComponent(eventId)}/queue/${encodeURIComponent(getVisitorId())}`
+  );
 }
 
 export function listOrders() {
@@ -101,6 +135,7 @@ export type EventInput = {
   venueName?: string;
   startsAt: string;
   category?: string;
+  waitingRoomEnabled?: boolean;
 };
 
 export type TicketTypeInput = {

@@ -38,7 +38,15 @@ export type PublicEvent = {
   description: string | null;
   venueName: string | null;
   startsAt: string;
+  waitingRoomEnabled: boolean;
   ticketTypes: TicketType[];
+};
+
+/** Waiting-room status: position is 1-based in line, 0 once admitted. */
+export type QueueStatus = {
+  admitted: boolean;
+  position: number;
+  waiting: number;
 };
 
 export type MarketplaceEvent = {

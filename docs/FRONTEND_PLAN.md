@@ -134,6 +134,35 @@ one catalog across organizers. Translated to this product:
   in `next dev` (retry connects); absent in production builds.
 - Follow-ups if wanted: Playwright journey entering via the marketplace homepage; a seed
   script for demo data (this round seeded via API calls).
+  (Both since done: `Seed:DemoData` demo seeder + the marketplace Playwright journey.)
+
+## M6 - Virtual waiting room (queue-based load leveling), implemented
+
+The flash-sale set piece: when an organizer arms the waiting room on an event, buyers queue
+and are admitted at a controlled rate instead of stampeding the inventory row.
+
+- [x] Backend: `Event.WaitingRoomEnabled` (`AddWaitingRoom` migration, create/update requests,
+  all public/marketplace responses); Redis sorted-set line scored by arrival ms (`ZADD NX`
+  makes re-joining idempotent — refresh never loses your place) + TTL'd per-visitor admission
+  keys + an active-queue registry set; `WaitingRoomAdmitter` background valve (config
+  `WaitingRoom`: `AdmitBatchSize` 5 / `AdmitIntervalSeconds` 5 / `AdmissionTtlSeconds` 300) —
+  replica-safe without leader election because `ZPOPMIN` is atomic.
+- [x] Enforcement where it matters: `POST /customer/holds` returns **429** unless the
+  `X-Visitor-Id` header carries an admitted visitor (staff/box-office endpoints bypass by
+  design). The UI gate is UX; the API is the security boundary.
+- [x] Anonymous queue API: `POST /public/events/{id}/queue` (join, idempotent) and
+  `GET /public/events/{id}/queue/{visitorId}` (poll fallback); 404 for unknown/off-sale
+  events; trivially admitted when the event has no waiting room.
+- [x] Real-time: hub methods `JoinQueue`/`LeaveQueue` (per-visitor groups
+  `queue:{eventId}:{visitorId}`), `SignalRQueueBroadcaster` pushes `queueAdmitted` +
+  `queuePosition` (top 50) each admission tick.
+- [x] Web: `WaitingRoomGate` wraps the ticket panel on `/events/{id}` and
+  `/t/{slug}/events/{id}` — visitor GUID in localStorage, SignalR push + 3s poll fallback,
+  position card; `createHold` always sends `X-Visitor-Id`; BFF proxies the anonymous queue
+  endpoints (REST API has no CORS on purpose). Organizer form gained the waiting-room toggle.
+- [x] Verification: 6 integration tests (429/admitted/FIFO/idempotent rejoin/staff bypass/
+  404s/SignalR push) — 129 backend tests green; typecheck/lint/build; Playwright 4/4; live
+  smoke of the full queue → admit → hold flow.
 
 ## Deliberately out of scope
 

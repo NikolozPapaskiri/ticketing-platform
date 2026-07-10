@@ -499,17 +499,19 @@ This block supersedes older phase-progress lines above if they disagree.
 - Post-v3 product hardening is complete: customer public catalog, customer holds/orders,
   refunds, ticket validation codes, order idempotency, ownership checks, domain metrics,
   multi-replica outbox claiming, and shared ticket-file storage config for Docker/Kubernetes.
-- Frontend milestones M0-M4 are complete in `apps/web`: public storefront, customer
+- Frontend milestones M0-M6 are complete in `apps/web`: public storefront, customer
   checkout/account, organizer portal, admin portal, Next.js BFF with HttpOnly cookies, SignalR
-  client, Playwright golden journey, CI web job, and docker-compose `web` service.
-- Current verification: 117 backend tests (60 unit + 57 integration), plus frontend typecheck,
-  lint, production build, npm audit, Playwright e2e, and docker-compose `web` image build.
+  client, Playwright e2e, CI web job, docker-compose `web` service, the tkt.ge-style
+  marketplace (M5), and the virtual waiting room (M6: Redis FIFO line, rate-limited admission
+  valve, SignalR queue pushes, 429-enforced customer holds via X-Visitor-Id; staff bypasses).
+- Current verification: 129 backend tests (60 unit + 69 integration, incl. 6 waiting-room),
+  plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
   `COOKIE_SECURE=false`; production HTTPS should keep secure cookies enabled.
-- Remaining planned work is not implementation-critical: mock-interview reps and optional future
-  depth such as reserved seating, Elasticsearch search, or a virtual waiting room.
+- Remaining planned work: a load test comparing the three reservation strategies (next up),
+  then mock-interview reps; optional depth such as reserved seating or Elasticsearch search.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

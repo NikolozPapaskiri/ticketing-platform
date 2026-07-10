@@ -43,7 +43,15 @@ public interface IEventRepository
 
     /// <summary>Image path regardless of status (organizers preview drafts); null when no image.</summary>
     Task<string?> GetImagePathAsync(Guid eventId, CancellationToken ct);
+
+    /// <summary>
+    /// Cross-tenant, two-column lookup for the waiting-room endpoints (they are polled by every
+    /// queued browser, so no graph load). Null when the event does not exist.
+    /// </summary>
+    Task<EventWaitingRoomState?> GetWaitingRoomStateAsync(Guid eventId, CancellationToken ct);
 }
+
+public sealed record EventWaitingRoomState(bool OnSale, bool WaitingRoomEnabled);
 
 /// <summary>SQL-projected catalog row: PriceFrom is MIN(ticket price) computed in the database.</summary>
 public sealed record MarketplaceEventRow(

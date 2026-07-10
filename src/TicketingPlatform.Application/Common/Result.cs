@@ -6,7 +6,8 @@ public enum ResultError
     NotFound,
     Conflict,
     Unauthorized,
-    Unavailable   // an upstream dependency (payment provider) is down: maps to 503, retry later
+    Unavailable,  // an upstream dependency (payment provider) is down: maps to 503, retry later
+    Throttled     // load-leveling says not yet (waiting room): maps to 429, join the queue
 }
 
 /// <summary>
@@ -33,6 +34,8 @@ public sealed class Result<T>
     public static Result<T> Unauthorized(string message) => new(false, default, ResultError.Unauthorized, message);
 
     public static Result<T> Unavailable(string message) => new(false, default, ResultError.Unavailable, message);
+
+    public static Result<T> Throttled(string message) => new(false, default, ResultError.Throttled, message);
 }
 
 /// <summary>Outcome of a use case with no return value (e.g. a state transition).</summary>

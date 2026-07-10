@@ -96,6 +96,7 @@ public sealed class EventService
                 ev.Description,
                 ev.VenueName,
                 ev.StartsAt,
+                ev.WaitingRoomEnabled,
                 ev.TicketTypes.Select(tt => new TicketTypeResponse(
                     tt.Id,
                     tt.Name,
@@ -133,6 +134,7 @@ public sealed class EventService
             VenueName = request.VenueName,
             StartsAt = request.StartsAt,
             Category = ParseCategory(request.Category),
+            WaitingRoomEnabled = request.WaitingRoomEnabled ?? false,
             CreatedAt = DateTimeOffset.UtcNow
             // Status defaults to Draft — the entity owns that invariant.
         };
@@ -142,7 +144,7 @@ public sealed class EventService
 
         return new EventResponse(
             ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(),
-            ev.Category.ToString(), ev.ImagePath is not null, []);
+            ev.Category.ToString(), ev.ImagePath is not null, ev.WaitingRoomEnabled, []);
     }
 
     public async Task<Result<EventResponse>> UpdateAsync(Guid tenantId, Guid id, UpdateEventRequest request, CancellationToken ct)
@@ -153,12 +155,15 @@ public sealed class EventService
 
         ev.UpdateDetails(request.Name, request.Description, request.VenueName, request.StartsAt,
             ParseCategory(request.Category));
+        // Null means "not sent" (older clients), not "turn it off".
+        if (request.WaitingRoomEnabled is { } waitingRoom)
+            ev.WaitingRoomEnabled = waitingRoom;
         await _events.SaveChangesAsync(ct);
 
         await _cache.RemoveAsync(EventGraphKey(tenantId, id), ct);
         return Result<EventResponse>.Success(new EventResponse(
             ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(),
-            ev.Category.ToString(), ev.ImagePath is not null, []));
+            ev.Category.ToString(), ev.ImagePath is not null, ev.WaitingRoomEnabled, []));
     }
 
     public async Task<Result<TicketTypeResponse>> AddTicketTypeAsync(
@@ -256,7 +261,7 @@ public sealed class EventService
         var ev = detail.Event;
         return Result<MarketplaceEventDetailResponse>.Success(new MarketplaceEventDetailResponse(
             ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Category.ToString(),
-            detail.TenantName, detail.TenantSlug, ev.ImagePath is not null,
+            detail.TenantName, detail.TenantSlug, ev.ImagePath is not null, ev.WaitingRoomEnabled,
             ev.TicketTypes.Select(tt => new TicketTypeResponse(
                 tt.Id, tt.Name, tt.Price, tt.Currency,
                 tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()));
@@ -311,6 +316,7 @@ public sealed class EventService
         ev.Status.ToString(),
         ev.Category.ToString(),
         ev.ImagePath is not null,
+        ev.WaitingRoomEnabled,
         ev.TicketTypes
             .Select(tt => new TicketTypeResponse(
                 tt.Id,

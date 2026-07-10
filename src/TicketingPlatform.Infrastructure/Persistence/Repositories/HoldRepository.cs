@@ -22,7 +22,7 @@ public sealed class HoldRepository : IHoldRepository
             .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(tt => tt.Id == ticketTypeId)
-            .Select(tt => new TicketTypeSaleContext(tt.TenantId, tt.EventId, tt.Event.Status.ToString()))
+            .Select(tt => new TicketTypeSaleContext(tt.TenantId, tt.EventId, tt.Event.Status.ToString(), tt.Event.WaitingRoomEnabled))
             .FirstOrDefaultAsync(ct);
 
     public Task<Guid?> GetHoldTenantIdAsync(Guid holdId, CancellationToken ct) =>

@@ -19,6 +19,13 @@ public class Event
     /// <summary>Storage-relative path of the event image; null = no image (UI shows a placeholder).</summary>
     public string? ImagePath { get; private set; }
 
+    /// <summary>
+    /// When true, customers must pass through the virtual waiting room (queue-based load
+    /// leveling) before they can reserve tickets. Organizers flip this on for on-sales whose
+    /// demand would otherwise stampede the inventory row.
+    /// </summary>
+    public bool WaitingRoomEnabled { get; set; }
+
     public DateTimeOffset StartsAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 

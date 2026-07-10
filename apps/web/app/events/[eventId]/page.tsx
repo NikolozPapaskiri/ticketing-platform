@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Calendar, MapPin, Store } from "lucide-react";
 import { getMarketplaceEvent } from "@/lib/server/public-api";
 import { TicketPicker } from "@/components/checkout/ticket-picker";
+import { WaitingRoomGate } from "@/components/checkout/waiting-room-gate";
 import { Badge } from "@/components/ui/badge";
 import { categoryGradient, categoryLabel, eventImageUrl } from "@/lib/marketplace";
 
@@ -70,7 +71,9 @@ export default async function MarketplaceEventPage({ params }: PageProps) {
         ) : null}
       </section>
 
-      <TicketPicker event={event} tenantSlug={event.tenantSlug} />
+      <WaitingRoomGate eventId={event.id} enabled={event.waitingRoomEnabled}>
+        <TicketPicker event={event} tenantSlug={event.tenantSlug} />
+      </WaitingRoomGate>
     </div>
   );
 }

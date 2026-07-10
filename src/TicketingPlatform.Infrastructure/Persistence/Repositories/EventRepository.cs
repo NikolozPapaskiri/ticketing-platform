@@ -159,4 +159,12 @@ public sealed class EventRepository : IEventRepository
             .Where(e => e.Id == eventId)
             .Select(e => e.ImagePath)
             .FirstOrDefaultAsync(ct);
+
+    public Task<EventWaitingRoomState?> GetWaitingRoomStateAsync(Guid eventId, CancellationToken ct) =>
+        _db.Events
+            .IgnoreQueryFilters() // anonymous queue endpoints: no tenant on the request
+            .AsNoTracking()
+            .Where(e => e.Id == eventId)
+            .Select(e => new EventWaitingRoomState(e.Status == EventStatus.OnSale, e.WaitingRoomEnabled))
+            .FirstOrDefaultAsync(ct);
 }

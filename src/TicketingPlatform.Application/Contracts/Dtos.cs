@@ -6,8 +6,8 @@ public record TenantResponse(Guid Id, string Name, string Slug);
 
 // Event. Category is a string validated against EventCategory names (null => Other) so the
 // JSON contract stays plain strings without a global enum-converter dependency.
-public record CreateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null);
-public record UpdateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null);
+public record CreateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null, bool? WaitingRoomEnabled = null);
+public record UpdateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null, bool? WaitingRoomEnabled = null);
 public record EventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt, string Status);
 public record EventResponse(
     Guid Id,
@@ -18,6 +18,7 @@ public record EventResponse(
     string Status,
     string Category,
     bool HasImage,
+    bool WaitingRoomEnabled,
     IReadOnlyList<TicketTypeResponse> TicketTypes);
 
 // Ticket type
@@ -97,7 +98,12 @@ public record MarketplaceEventDetailResponse(
     string TenantName,
     string TenantSlug,
     bool HasImage,
+    bool WaitingRoomEnabled,
     IReadOnlyList<TicketTypeResponse> TicketTypes);
+
+// Waiting room (queue-based load leveling). Position is 1-based; 0 once admitted.
+public record JoinQueueRequest(Guid VisitorId);
+public record QueueStatusResponse(bool Admitted, long Position, long Waiting);
 
 // Public catalog
 public record PublicEventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt);
@@ -107,6 +113,7 @@ public record PublicEventResponse(
     string? Description,
     string? VenueName,
     DateTimeOffset StartsAt,
+    bool WaitingRoomEnabled,
     IReadOnlyList<TicketTypeResponse> TicketTypes);
 
 // Ticket validation

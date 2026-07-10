@@ -123,11 +123,17 @@ builder.Services.AddScoped<HoldService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<OrderService>();
 builder.Services.AddScoped<TicketService>();
+builder.Services.AddScoped<WaitingRoomService>();
 
 // Hold TTL / expiry-scan settings (plain singleton so Application stays free of IOptions).
 builder.Services.AddSingleton(
     builder.Configuration.GetSection(TicketingPlatform.Application.Common.HoldOptions.SectionName)
         .Get<TicketingPlatform.Application.Common.HoldOptions>() ?? new());
+
+// Waiting-room valve settings (admission batch size / interval / admission TTL).
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection(TicketingPlatform.Application.Common.WaitingRoomOptions.SectionName)
+        .Get<TicketingPlatform.Application.Common.WaitingRoomOptions>() ?? new());
 
 // SignalR with the Redis backplane: group membership and broadcasts flow through Redis, so a
 // message published from pod B reaches a client connected to pod A. Without the backplane,
@@ -135,6 +141,7 @@ builder.Services.AddSingleton(
 builder.Services.AddSignalR()
     .AddStackExchangeRedis(builder.Configuration.GetConnectionString("Redis")!);
 builder.Services.AddSingleton<IAvailabilityBroadcaster, SignalRAvailabilityBroadcaster>();
+builder.Services.AddSingleton<IQueueBroadcaster, SignalRQueueBroadcaster>();
 
 builder.Services.AddCors(options =>
 {

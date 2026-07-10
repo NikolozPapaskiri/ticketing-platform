@@ -24,8 +24,10 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
 
 - Planned backend milestones are complete through `v3-production`, plus the marketplace
   catalog (categories, images, cross-tenant public browse).
-- Frontend milestones M0-M5 are complete in `apps/web` (M5 = the tkt.ge-style marketplace).
-- Current verified backend suite: 123 tests (60 unit + 63 integration).
+- Frontend milestones M0-M6 are complete in `apps/web` (M5 = the tkt.ge-style marketplace,
+  M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
+  position pushes, 429-enforced checkout on gated events).
+- Current verified backend suite: 129 tests (60 unit + 69 integration).
 - Current verified frontend checks: typecheck, lint, production build, npm audit, and the
   Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the

@@ -65,10 +65,11 @@ internal static class ApiClientExtensions
         return (email, password, await client.LoginAsync(email, password));
     }
 
-    public static async Task<EventDto> CreateEventAsync(this HttpClient client, string staffToken, string name = "Test Event")
+    public static async Task<EventDto> CreateEventAsync(this HttpClient client, string staffToken,
+        string name = "Test Event", bool waitingRoomEnabled = false)
     {
         var response = await client.PostAsAsync(staffToken, "/api/v1/events",
-            new { name, startsAt = DateTimeOffset.UtcNow.AddMonths(1) });
+            new { name, startsAt = DateTimeOffset.UtcNow.AddMonths(1), waitingRoomEnabled });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<EventDto>(Json))!;
     }
