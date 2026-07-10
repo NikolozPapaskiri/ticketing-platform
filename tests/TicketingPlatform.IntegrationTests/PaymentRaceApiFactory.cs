@@ -32,6 +32,10 @@ public class PaymentRaceApiFactory : TicketingApiFactory
         builder.UseSetting("Holds:TtlSeconds", "3");
         builder.UseSetting("Holds:ExpiryScanSeconds", "1");
 
+        // Long payment lease so the reconciliation worker never touches a still-in-flight test
+        // order (the tests drive recovery explicitly via the client's retry, not the worker).
+        builder.UseSetting("Holds:PaymentLeaseSeconds", "600");
+
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IPaymentGateway>();

@@ -86,6 +86,34 @@ public sealed class PaymentProviderClient : IPaymentGateway
         }
     }
 
+    public async Task<PaymentInquiry> GetChargeStatusAsync(string idempotencyKey, CancellationToken ct)
+    {
+        try
+        {
+            using var response = await _http.GetAsync($"charges/{Uri.EscapeDataString(idempotencyKey)}", ct);
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return PaymentInquiry.NotCharged();        // the provider has no record of this key
+            if (!response.IsSuccessStatusCode)
+                return PaymentInquiry.Unknown();           // transient: reconcile again later
+
+            var body = await response.Content.ReadFromJsonAsync<ChargeStatusResponse>(cancellationToken: ct);
+            return body?.Status switch
+            {
+                "charged" => PaymentInquiry.Charged(body.ChargeId ?? "unknown"),
+                "not_charged" => PaymentInquiry.NotCharged(),
+                "pending" => PaymentInquiry.Pending(),
+                _ => PaymentInquiry.Unknown()
+            };
+        }
+        catch (Exception ex) when (ex is HttpRequestException or BrokenCircuitException
+                                       or TimeoutRejectedException or TaskCanceledException)
+        {
+            return PaymentInquiry.Unknown(); // never assume "not charged" on a network fault
+        }
+    }
+
     private sealed record ChargeResponse(string ChargeId);
     private sealed record RefundResponse(string RefundId);
+    private sealed record ChargeStatusResponse(string Status, string? ChargeId);
 }

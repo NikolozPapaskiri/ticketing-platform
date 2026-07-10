@@ -12,7 +12,9 @@ namespace TicketingPlatform.IntegrationTests.Support;
 /// </summary>
 public sealed class ControllablePaymentGateway : IPaymentGateway
 {
-    private readonly ConcurrentDictionary<string, byte> _chargeKeys = new();
+    // key -> provider charge id, for every key that produced a SUCCESSFUL charge. Doubles as the
+    // provider's memory so GetChargeStatusAsync (reconciliation) can answer truthfully.
+    private readonly ConcurrentDictionary<string, string> _charges = new();
     private readonly ConcurrentDictionary<string, byte> _refundKeys = new();
 
     /// <summary>Freeze a charge mid-flight to force an exact interleaving. Disarmed by default.</summary>
@@ -22,15 +24,15 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
 
     private static PaymentResult DefaultCharge(PaymentCharge c) => PaymentResult.Success($"ch_{Guid.NewGuid():N}");
 
-    /// <summary>Distinct provider idempotency keys charged. This is what "charged twice" means.</summary>
-    public int DistinctChargeCount => _chargeKeys.Count;
+    /// <summary>Distinct provider idempotency keys successfully charged. This is what "charged twice" means.</summary>
+    public int DistinctChargeCount => _charges.Count;
 
     /// <summary>Distinct provider idempotency keys refunded (used by PR 2's refund tests).</summary>
     public int DistinctRefundCount => _refundKeys.Count;
 
     public void Reset()
     {
-        _chargeKeys.Clear();
+        _charges.Clear();
         _refundKeys.Clear();
         ChargeResponder = DefaultCharge;
     }
@@ -38,8 +40,10 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
     public async Task<PaymentResult> ChargeAsync(PaymentCharge charge, CancellationToken ct)
     {
         await ChargeGate.PassAsync(ct);          // deterministic interleaving seam
-        _chargeKeys.TryAdd(charge.IdempotencyKey, 0);
-        return ChargeResponder(charge);
+        var result = ChargeResponder(charge);
+        if (result.Succeeded)
+            _charges.TryAdd(charge.IdempotencyKey, result.ProviderChargeId!); // idempotent per key
+        return result;
     }
 
     public Task<PaymentResult> RefundAsync(PaymentRefund refund, CancellationToken ct)
@@ -47,4 +51,9 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
         _refundKeys.TryAdd(refund.IdempotencyKey, 0);
         return Task.FromResult(PaymentResult.Success($"rf_{Guid.NewGuid():N}"));
     }
+
+    public Task<PaymentInquiry> GetChargeStatusAsync(string idempotencyKey, CancellationToken ct) =>
+        Task.FromResult(_charges.TryGetValue(idempotencyKey, out var chargeId)
+            ? PaymentInquiry.Charged(chargeId)
+            : PaymentInquiry.NotCharged());
 }

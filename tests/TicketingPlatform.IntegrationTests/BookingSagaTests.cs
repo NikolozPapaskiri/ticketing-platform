@@ -104,7 +104,7 @@ public class BookingSagaTests
     }
 
     [Fact]
-    public async Task ProviderDown_Returns503_NothingRecorded()
+    public async Task ProviderDown_KeepsPendingPaymentForReconciliation()
     {
         _factory.PaymentProvider.Reset();
         _factory.PaymentProvider
@@ -115,11 +115,17 @@ public class BookingSagaTests
         var response = await _client.PostAsAsync(staff, "/api/v1/orders",
             new { holdId = hold.Id, customerEmail = "buyer@example.com" });
 
-        // An outage is not a decline: 503, the hold untouched, the buyer just retries.
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        // Durable payment state: an ambiguous provider outcome does NOT vanish. The claim was
+        // already committed, so we keep a PendingPayment order (202 Accepted) for reconciliation
+        // rather than pretending nothing happened - a lost response must never oversell or drop
+        // a possible charge. The hold stays owned (PaymentPending), not idle Active inventory.
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderDto>(ApiClientExtensions.Json);
+        Assert.Equal("PendingPayment", order!.Status);
+
         var holdRead = await (await _client.GetAsAsync(staff, $"/api/v1/holds/{hold.Id}"))
             .Content.ReadFromJsonAsync<HoldDto>(ApiClientExtensions.Json);
-        Assert.Equal("Active", holdRead!.Status);
+        Assert.Equal("PaymentPending", holdRead!.Status);
     }
 
     [Fact]

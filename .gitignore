@@ -36,3 +36,6 @@ coverage/
 playwright-report/
 test-results/
 *screenshot*.log
+
+# Local preview/launch config (machine-specific absolute paths)
+.claude/launch.json

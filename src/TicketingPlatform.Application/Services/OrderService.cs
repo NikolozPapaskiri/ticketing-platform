@@ -8,20 +8,24 @@ using TicketingPlatform.Domain;
 namespace TicketingPlatform.Application.Services;
 
 /// <summary>
-/// The booking saga: hold -> charge -> confirm -> announce.
+/// The booking saga, rebuilt as a DURABLE payment state machine so no failure window can
+/// oversell a seat or lose money (see docs/PRODUCTION_SAFETY_HARDENING_PLAN.md, PR 1).
 ///
-///   1. Validate the hold (Active, not past TTL) - the inventory is already reserved, so this
-///      step never touches availability.
-///   2. Charge the payment provider (resilient client; the ORDER ID is the idempotency key, so
-///      a retried charge for the same order can never bill twice).
-///   3a. Success: order Confirmed + hold Confirmed + OrderConfirmed event staged in the outbox,
-///       ALL persisted by one SaveChanges = one transaction. The dispatcher publishes to
-///       RabbitMQ afterwards - the dual-write problem is solved by the outbox, not by hope.
-///   3b. Declined: order PaymentFailed; the hold STAYS ACTIVE so the buyer can retry with
-///       another card until the TTL. Compensation is the hold-expiry service: if they never
-///       succeed, the inventory flows back automatically. Nothing is ever manually unwound.
-///   3c. Provider down: 503 to the caller, nothing recorded as failed - the buyer's hold is
-///       untouched and they simply try again.
+///   1. Replay/recover: if the idempotency key already has an order, return it - or, if that
+///      order is still PendingPayment (a crashed/lost attempt), reconcile it with the provider.
+///   2. Claim: atomically flip the hold Active -> PaymentPending (concurrency-token guarded, so
+///      exactly one checkout wins), open a PendingPayment order, and record the idempotency key -
+///      ALL in one transaction, committed BEFORE any money moves. The order id is the stable
+///      provider idempotency key.
+///   3. Charge with NO database transaction open (a network call must never hold a DB lock).
+///   4. Finalize in a second transaction:
+///      - success  -> order + hold Confirmed + OrderConfirmed outboxed;
+///      - decline  -> order PaymentFailed, hold back to Active (retry until TTL) or Expired;
+///      - ambiguous (provider unreachable) -> stay PendingPayment (202) and let the reconciler settle it.
+///
+/// Because the hold is PaymentPending (not Active) the moment payment is in flight, the expiry
+/// worker cannot reclaim a seat that is being paid for, and a crash leaves a durable order the
+/// reconciler (or the client's retry) can complete without charging twice.
 /// </summary>
 public sealed class OrderService
 {
@@ -30,15 +34,17 @@ public sealed class OrderService
     private readonly IReservationStrategy _reservation;
     private readonly IOutbox _outbox;
     private readonly TimeProvider _clock;
+    private readonly HoldOptions _holdOptions;
 
     public OrderService(IOrderRepository orders, IPaymentGateway payments,
-        IReservationStrategy reservation, IOutbox outbox, TimeProvider clock)
+        IReservationStrategy reservation, IOutbox outbox, TimeProvider clock, HoldOptions holdOptions)
     {
         _orders = orders;
         _payments = payments;
         _reservation = reservation;
         _outbox = outbox;
         _clock = clock;
+        _holdOptions = holdOptions;
     }
 
     public async Task<Result<OrderResponse>> CreateAsync(Guid tenantId, CreateOrderRequest request, CancellationToken ct)
@@ -56,53 +62,30 @@ public sealed class OrderService
         idempotencyKey = NormalizeKey(idempotencyKey);
         actorKey ??= customerUserId is null ? $"tenant:{tenantId:N}" : $"customer:{customerUserId.Value:N}";
         var requestHash = HashRequest(request, customerUserId);
-        IdempotencyRecord? idempotency = null;
-        var orderId = Guid.NewGuid();
 
+        // (1) Replay or recover an attempt already made under this idempotency key.
         if (idempotencyKey is not null)
         {
-            idempotency = await _orders.GetIdempotencyRecordAsync(tenantId, actorKey, idempotencyKey, ct);
-            if (idempotency is not null)
+            var existing = await _orders.GetIdempotencyRecordAsync(tenantId, actorKey, idempotencyKey, ct);
+            if (existing is not null)
             {
-                if (!StringComparer.Ordinal.Equals(idempotency.RequestHash, requestHash))
+                if (!StringComparer.Ordinal.Equals(existing.RequestHash, requestHash))
                     return Result<OrderResponse>.Conflict("This idempotency key was already used for a different order request.");
-
-                if (idempotency.Status == IdempotencyRecordStatus.InProgress)
-                    return Result<OrderResponse>.Conflict("An order with this idempotency key is still in progress.");
-
-                var existing = await _orders.GetAsync(idempotency.OrderId, ct);
-                return existing is null
-                    ? Result<OrderResponse>.Conflict("The idempotency record points to an order that no longer exists.")
-                    : Result<OrderResponse>.Success(Map(existing));
+                return await ResolveOrderAsync(existing.OrderId, ct);
             }
         }
 
+        // (2) Validate and price the hold before taking the payment claim.
         var hold = await _orders.GetHoldForOrderAsync(request.HoldId, ct);
         if (hold is null)
             return Result<OrderResponse>.NotFound($"Hold '{request.HoldId}' was not found.");
-
+        if (customerUserId is not null && hold.CustomerUserId != customerUserId)
+            return Result<OrderResponse>.NotFound($"Hold '{request.HoldId}' was not found."); // ownership hidden as 404
         if (hold.Status != HoldStatus.Active || hold.IsExpired(now))
             return Result<OrderResponse>.Conflict($"Hold is '{(hold.IsExpired(now) ? "expired" : hold.Status.ToString())}' and cannot be purchased.");
 
-        if (customerUserId is not null && hold.CustomerUserId != customerUserId)
-            return Result<OrderResponse>.NotFound($"Hold '{request.HoldId}' was not found.");
-
-        if (idempotencyKey is not null)
-        {
-            idempotency = new IdempotencyRecord
-            {
-                Id = Guid.NewGuid(),
-                TenantId = tenantId,
-                ActorKey = actorKey,
-                Key = idempotencyKey,
-                RequestHash = requestHash,
-                OrderId = orderId,
-                CreatedAt = now
-            };
-            _orders.Add(idempotency);
-            await _orders.SaveChangesAsync(ct); // claim the key before the external charge
-        }
-
+        // (3) Claim + open order + record key, one transaction, committed BEFORE the charge.
+        var orderId = Guid.NewGuid();
         var order = new Order
         {
             Id = orderId,
@@ -114,57 +97,184 @@ public sealed class OrderService
             Currency = hold.TicketType.Currency,
             CreatedAt = now
         };
+        IdempotencyRecord? idempotency = idempotencyKey is null ? null : new IdempotencyRecord
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            ActorKey = actorKey,
+            Key = idempotencyKey,
+            RequestHash = requestHash,
+            OrderId = orderId,
+            CreatedAt = now
+        };
 
-        // The order id doubles as the idempotency key: however many times the resilient client
-        // retries this charge, the provider counts it once.
+        hold.ClaimForPayment(now, now + _holdOptions.PaymentLease);
+        _orders.Add(order);
+        if (idempotency is not null)
+            _orders.Add(idempotency);
+
+        var claim = await _orders.TrySaveChangesAsync(ct);
+        if (claim != SaveOutcome.Success)
+        {
+            // Lost the claim race or a same-key insert collided. Never a 500: replay the winner
+            // when we can find it, otherwise the hold is simply no longer claimable.
+            if (idempotencyKey is not null)
+            {
+                var winner = await _orders.GetIdempotencyRecordAsync(tenantId, actorKey, idempotencyKey, ct);
+                if (winner is not null && winner.OrderId != orderId)
+                    return await ResolveOrderAsync(winner.OrderId, ct);
+            }
+            return Result<OrderResponse>.Conflict("This hold is no longer available for checkout.");
+        }
+
+        // (4) Charge with the persisted order id as the stable key. No DB transaction is open.
         var payment = await _payments.ChargeAsync(
             new PaymentCharge(order.Id.ToString(), order.Amount, order.Currency), ct);
 
+        // (5) Finalize in a second transaction.
+        return await FinalizeAsync(order.Id, payment, ct);
+    }
+
+    /// <summary>Settle a freshly-charged order (or reconcile a recovered one) in one transaction.</summary>
+    private async Task<Result<OrderResponse>> FinalizeAsync(Guid orderId, PaymentResult payment, CancellationToken ct)
+    {
+        var now = _clock.GetUtcNow();
+        var order = await _orders.GetOrderWithHoldForUpdateAsync(orderId, ct);
+        if (order is null)
+            return Result<OrderResponse>.NotFound($"Order '{orderId}' was not found.");
+        if (order.Status != OrderStatus.PendingPayment)
+            return ResultForResolvedOrder(order); // a reconciler/retry already settled it
+
+        var idempotency = await _orders.GetIdempotencyForOrderForUpdateAsync(orderId, ct);
+
         if (payment.Failure == PaymentFailure.ProviderUnavailable)
         {
-            // Do not persist a failed order for an outage - the buyer just retries later.
-            if (idempotency is not null)
-            {
-                _orders.Remove(idempotency);
-                await _orders.SaveChangesAsync(ct);
-            }
+            // Ambiguous: the charge may or may not have landed. Keep the durable claim and push
+            // the lease out; reconciliation (or the client's retry) settles it. Nothing is lost.
+            if (order.Hold.Status == HoldStatus.PaymentPending)
+                order.Hold.ExtendPaymentLease(now + _holdOptions.PaymentLease);
+            await _orders.SaveChangesAsync(ct);
             TicketingMetrics.OrdersPaymentUnavailable.Add(1);
-            return Result<OrderResponse>.Unavailable("The payment provider is unavailable; please try again shortly.");
+            return Result<OrderResponse>.Success(Map(order)); // PendingPayment -> 202 Accepted
         }
-
-        _orders.Add(order);
 
         if (!payment.Succeeded)
         {
-            // Declined: record the failed attempt; the hold survives for a retry until TTL.
-            order.MarkPaymentFailed();
-            idempotency?.Complete(now);
+            SettleDeclined(order, idempotency, now);
             await _orders.SaveChangesAsync(ct);
             TicketingMetrics.OrdersPaymentDeclined.Add(1);
             return Result<OrderResponse>.Conflict("Payment was declined.");
         }
 
-        order.MarkConfirmed(payment.ProviderChargeId!);
-        hold.Confirm(); // the reserved quantity is now permanently sold
+        SettleConfirmed(order, idempotency, payment.ProviderChargeId!, now);
+        var save = await _orders.TrySaveChangesAsync(ct);
+        if (save == SaveOutcome.ConcurrencyConflict)
+        {
+            var settled = await _orders.GetOrderWithHoldForUpdateAsync(orderId, ct);
+            return settled is null
+                ? Result<OrderResponse>.NotFound($"Order '{orderId}' was not found.")
+                : ResultForResolvedOrder(settled);
+        }
+        TicketingMetrics.OrdersConfirmed.Add(1);
+        return Result<OrderResponse>.Success(Map(order));
+    }
+
+    /// <summary>
+    /// Replay or recover the order behind a known idempotency key. A still-PendingPayment order
+    /// means a prior attempt never finalized (crash / lost response); ask the provider what
+    /// really happened rather than charging again.
+    /// </summary>
+    private async Task<Result<OrderResponse>> ResolveOrderAsync(Guid orderId, CancellationToken ct)
+    {
+        var order = await _orders.GetOrderWithHoldForUpdateAsync(orderId, ct);
+        if (order is null)
+            return Result<OrderResponse>.Conflict("The idempotency record points to an order that no longer exists.");
+        if (order.Status != OrderStatus.PendingPayment)
+            return ResultForResolvedOrder(order);
+
+        var inquiry = await _payments.GetChargeStatusAsync(orderId.ToString(), ct);
+        return await ApplyInquiryAsync(order, inquiry, ct);
+    }
+
+    /// <summary>Apply a provider reconciliation verdict to a PendingPayment order. Shared by the
+    /// retry path and the background reconciler.</summary>
+    public async Task<Result<OrderResponse>> ApplyInquiryAsync(Order order, PaymentInquiry inquiry, CancellationToken ct)
+    {
+        var now = _clock.GetUtcNow();
+        var idempotency = await _orders.GetIdempotencyForOrderForUpdateAsync(order.Id, ct);
+
+        switch (inquiry.Outcome)
+        {
+            case PaymentOutcome.Charged:
+                SettleConfirmed(order, idempotency, inquiry.ProviderChargeId!, now);
+                break;
+            case PaymentOutcome.NotCharged:
+                SettleDeclined(order, idempotency, now);
+                break;
+            default: // Pending / Unknown: still ambiguous - keep the claim and try again later.
+                if (order.Hold.Status == HoldStatus.PaymentPending)
+                    order.Hold.ExtendPaymentLease(now + _holdOptions.PaymentLease);
+                await _orders.SaveChangesAsync(ct);
+                return Result<OrderResponse>.Success(Map(order));
+        }
+
+        var save = await _orders.TrySaveChangesAsync(ct);
+        if (save == SaveOutcome.ConcurrencyConflict)
+        {
+            var settled = await _orders.GetOrderWithHoldForUpdateAsync(order.Id, ct);
+            if (settled is not null)
+                return ResultForResolvedOrder(settled);
+        }
+        return ResultForResolvedOrder(order);
+    }
+
+    private void SettleConfirmed(Order order, IdempotencyRecord? idempotency, string providerChargeId, DateTimeOffset now)
+    {
+        order.MarkConfirmed(providerChargeId);
+        if (order.Hold.Status == HoldStatus.PaymentPending)
+            order.Hold.ConfirmFromPayment(now);
 
         // Staged into the SAME transaction as the order + hold changes (the outbox pattern).
         _outbox.Add("OrderConfirmed", new
         {
             OrderId = order.Id,
-            TenantId = tenantId,
-            TicketTypeId = hold.TicketTypeId,
-            hold.Quantity,
+            order.TenantId,
+            order.Hold.TicketTypeId,
+            order.Hold.Quantity,
             order.CustomerEmail,
             order.Amount,
             order.Currency
         });
-
         idempotency?.Complete(now);
-        await _orders.SaveChangesAsync(ct);
-
-        TicketingMetrics.OrdersConfirmed.Add(1);
-        return Result<OrderResponse>.Success(Map(order));
     }
+
+    private void SettleDeclined(Order order, IdempotencyRecord? idempotency, DateTimeOffset now)
+    {
+        order.MarkPaymentFailed();
+        var hold = order.Hold;
+        if (hold.Status == HoldStatus.PaymentPending)
+        {
+            if (hold.ExpiresAt > now)
+            {
+                hold.ReturnToActiveFromPayment(now); // TTL remains: buyer may retry on the same hold
+            }
+            else
+            {
+                hold.ExpireFromPayment(now);
+                hold.TicketType.Inventory.Release(hold.Quantity); // no retry window left: give the seat back
+                _outbox.Add("AvailabilityChanged", new { hold.TenantId, hold.TicketType.EventId, hold.TicketTypeId });
+            }
+        }
+        idempotency?.Complete(now);
+    }
+
+    private static Result<OrderResponse> ResultForResolvedOrder(Order order) => order.Status switch
+    {
+        OrderStatus.Confirmed => Result<OrderResponse>.Success(Map(order)),
+        OrderStatus.Refunded => Result<OrderResponse>.Success(Map(order)),
+        OrderStatus.PaymentFailed => Result<OrderResponse>.Conflict("Payment was declined."),
+        _ => Result<OrderResponse>.Success(Map(order)) // PendingPayment -> 202 Accepted
+    };
 
     public async Task<Result<OrderResponse>> GetByIdAsync(Guid orderId, CancellationToken ct)
     {

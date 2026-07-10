@@ -47,13 +47,15 @@ public sealed class PaymentRaceTests
     {
         var ctx = await ArrangeOnSaleHoldAsync(capacity: 5, quantity: 1);
 
-        // Freeze BOTH charges: both requests pass the "hold is Active" check, then park at the
-        // provider together, guaranteeing the interleaving the defect needs.
-        _factory.Gateway.ChargeGate.Arm(2);
+        // Freeze the winner's charge. Today (buggy) BOTH checkouts reach the charge and bill the
+        // card; once fixed, the atomic Active->PaymentPending claim lets only ONE reach the
+        // charge and the other is rejected before any money moves. Arm(1) captures both worlds:
+        // exactly one charge should ever be in flight.
+        _factory.Gateway.ChargeGate.Arm(1);
         var first = PostOrderAsync(ctx.CustomerToken, ctx.HoldId, idempotencyKey: "checkout-A");
         var second = PostOrderAsync(ctx.CustomerToken, ctx.HoldId, idempotencyKey: "checkout-B");
 
-        await _factory.Gateway.ChargeGate.WaitForArrivalsAsync(2, TimeSpan.FromSeconds(15));
+        await _factory.Gateway.ChargeGate.WaitForArrivalsAsync(1, TimeSpan.FromSeconds(15));
         _factory.Gateway.ChargeGate.Release();
         var results = await Task.WhenAll(first, second);
 
@@ -95,28 +97,28 @@ public sealed class PaymentRaceTests
     [Fact]
     public async Task Checkout_WhenPaymentCrossesHoldExpiry_DoesNotReleaseSoldInventory()
     {
-        var ctx = await ArrangeOnSaleHoldAsync(capacity: 1, quantity: 1);
+        var ctx = await ArrangeOnSaleHoldAsync(capacity: 1, quantity: 1); // one seat, now held (available 0)
 
-        // Freeze only the first buyer's charge; the second buyer's charge passes through.
+        // Freeze the buyer's charge. Once fixed, the claim has already flipped the hold to
+        // PaymentPending by this point, so the seat is being paid for - not idle inventory.
         _factory.Gateway.ChargeGate.Arm(1);
-        var firstBuyer = PostOrderAsync(ctx.CustomerToken, ctx.HoldId, idempotencyKey: "buyer-1");
+        var buyer = PostOrderAsync(ctx.CustomerToken, ctx.HoldId, idempotencyKey: "buyer-1");
         await _factory.Gateway.ChargeGate.WaitForArrivalsAsync(1, TimeSpan.FromSeconds(15));
 
-        // With the payment frozen, let the expiry worker (TTL 3s, scan 1s) reclaim the seat.
-        await WaitForAvailabilityAsync(ctx.StaffToken, ctx.EventId, expected: 1, timeout: TimeSpan.FromSeconds(15));
+        // Give the expiry worker (TTL 3s, scan 1s) time to run while the payment is in flight.
+        // INVARIANT: a hold that is being paid for must never be reclaimed. Today the worker
+        // expires the still-Active hold and releases the seat (availability -> 1); once fixed the
+        // hold is PaymentPending and the worker skips it, so the seat stays sold-out.
+        await Task.Delay(TimeSpan.FromSeconds(6));
+        Assert.Equal(0, await AvailabilityAsync(ctx.StaffToken, ctx.EventId));
 
-        // A second buyer legitimately takes the reclaimed seat and checks out to completion.
-        var secondBuyer = await CreateCustomerAsync();
-        var secondHold = await CreateCustomerHoldAsync(secondBuyer, ctx.TicketTypeId);
-        var secondResult = await PostOrderAsync(secondBuyer.Token, secondHold, idempotencyKey: "buyer-2");
-        Assert.Equal(HttpStatusCode.Created, secondResult.StatusCode);
-
-        // Now release the first payment: the stale in-memory hold would silently clobber
-        // Expired -> Confirmed, producing a second sale of a one-seat ticket type.
+        // Release the payment: it confirms the seat it legitimately still owns.
         _factory.Gateway.ChargeGate.Release();
-        await firstBuyer;
+        var result = await buyer;
+        Assert.Equal(HttpStatusCode.Created, result.StatusCode);
 
         Assert.Equal(1, await ConfirmedOrdersForTicketTypeAsync(ctx.TicketTypeId));
+        Assert.Equal(0, await AvailabilityAsync(ctx.StaffToken, ctx.EventId)); // sold, never oversold
     }
 
     // ---- P0: crash after provider success must recover, not strand InProgress ------------
@@ -184,18 +186,11 @@ public sealed class PaymentRaceTests
         return _client.SendAsync(request);
     }
 
-    private async Task WaitForAvailabilityAsync(string staff, Guid eventId, int expected, TimeSpan timeout)
+    private async Task<int> AvailabilityAsync(string staff, Guid eventId)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            var graph = await (await _client.GetAsAsync(staff, $"/api/v1/events/{eventId}"))
-                .Content.ReadFromJsonAsync<EventDto>(ApiClientExtensions.Json);
-            if (graph!.TicketTypes.Single().AvailableQuantity == expected)
-                return;
-            await Task.Delay(250);
-        }
-        throw new TimeoutException($"Availability never reached {expected} within {timeout}.");
+        var graph = await (await _client.GetAsAsync(staff, $"/api/v1/events/{eventId}"))
+            .Content.ReadFromJsonAsync<EventDto>(ApiClientExtensions.Json);
+        return graph!.TicketTypes.Single().AvailableQuantity;
     }
 
     private async Task<int> ConfirmedOrdersForHoldAsync(Guid holdId)
