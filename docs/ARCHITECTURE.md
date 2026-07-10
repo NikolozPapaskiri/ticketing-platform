@@ -131,6 +131,19 @@ Restraint is the senior signal. Splitting to fix messy code produces distributed
   "in-process state breaks at two replicas" lesson governs the cache (Redis, not IMemoryCache)
   and the locks (the DB token, not a process lock).
 
+- **Durable payment and money invariants (post-`v3` hardening).** Checkout claims the hold
+  (`Active → PaymentPending`) and persists the order BEFORE the charge, so a payment in flight
+  can't be oversold or lost; recovery is by the order id (the stable provider key) via a retry or
+  the reconciler. Every post-payment transition is a compare-and-swap: refund claims
+  `Confirmed → RefundPending` with a stable `refund:{orderId}` key so customer and staff can't
+  double-refund; ticket scan is an `xmin`-guarded `Issued → Scanned` so two scanners admit once;
+  hold release credits inventory exactly once under a release/expiry race.
+
+- **Scanned-ticket refund policy: a scanned ticket is non-refundable.** Chosen over
+  allow-with-audit and staff-override because admission consumes the good — the simplest rule to
+  reason about and enforce. The refund path rejects a `Scanned` ticket with a 409; the decision is
+  revisitable (an authorized staff-override could be layered on later without changing the model).
+
 ## Testing strategy
 
 Many fast unit tests on domain/application logic (the state machine, reservation math,

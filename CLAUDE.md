@@ -526,9 +526,17 @@ This block supersedes older phase-progress lines above if they disagree.
   migration. Deterministic race harness in tests (`AsyncGate`, `ControllablePaymentGateway`,
   `FaultInterceptor`). **Still open from the plan: PR 2 (atomic refund/scan/release), PR 3
   (RabbitMQ publisher confirms + topology), PR 4 (waiting-room Lua/token-bucket), PR 5 (prod ops).**
-- Current verification: 134 backend tests (60 unit + 74 integration, incl. 6 waiting-room and
-  5 payment-race/reconciliation), plus frontend typecheck, lint, production build, Playwright
-  e2e (4), and live API smoke.
+- **Atomic post-payment transitions (hardening plan PR 2) is done.** Refund claims
+  `Confirmed → RefundPending` (order `xmin`) with a stable `refund:{orderId}` key so customer +
+  staff can't double-refund; ticket scan is an `xmin` compare-and-swap (`Issued → Scanned`, one
+  admission); hold release credits inventory exactly once under a race (optimistic no longer
+  re-credits on a hold-row conflict; pessimistic/redis roll back idempotently). **Policy: a
+  scanned ticket is non-refundable** (409). `AddRefundPendingAndTicketConcurrency` migration.
+  Open PR-2 tail: per-strategy release-race tests + a refund reconciler. Next: PR 3 (RabbitMQ
+  publisher confirms + topology + bounded retry).
+- Current verification: 137 backend tests (60 unit + 77 integration, incl. 6 waiting-room, 5
+  payment-race/reconciliation, and 3 refund/scan/release), plus frontend typecheck, lint,
+  production build, Playwright e2e (4), and live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
@@ -540,9 +548,9 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Immediate planned work: continue `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md` at **PR 2**
-  (atomic refund/scan/release with stable refund key + reconciliation). Mock-interview reps
-  follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- Immediate planned work: continue `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md` at **PR 3**
+  (RabbitMQ publisher confirms, topology-before-dispatch, bounded consumer retry). Mock-interview
+  reps follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

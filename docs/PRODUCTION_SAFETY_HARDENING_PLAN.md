@@ -285,6 +285,18 @@ Do not start the refund/scan work until all of the following are true:
 
 ## PR 2: Atomic refund, ticket scan, and hold release
 
+**Status: DONE** (branch `feature/atomic-state-transitions`). Red suite `test: expose concurrent
+refund, scan, and release races` → `feat: make refund, ticket scan, and hold release atomic` →
+this docs update. 137 tests green. Scanned-ticket policy chosen: **non-refundable** (recorded in
+`docs/ARCHITECTURE.md`). Notes: refund uses a stable `refund:{orderId}` key + `Confirmed →
+RefundPending` claim (actor kept only in the audit event); ticket scan is an `xmin` compare-and-
+swap; the optimistic release no longer re-credits on a hold-row conflict, and pessimistic/redis
+releases roll back idempotently. **Still open from this PR's gate:** per-strategy release-race
+tests (only the default optimistic strategy is currently exercised by `ConcurrentRelease_*`), a
+dedicated crash-after-refund reconciliation test, and a background refund reconciler for a
+client that never retries (today an ambiguous refund is safe to re-drive via the stable key but
+relies on a retry). Next: PR 3 (RabbitMQ publisher confirms + topology + bounded consumer retry).
+
 Suggested branch: `feature/atomic-state-transitions`
 
 Suggested commits:
