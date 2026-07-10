@@ -10,3 +10,4 @@ resources:
   - rabbitmq.yaml
   - api-config.yaml
   - api.yaml
+  - web.yaml

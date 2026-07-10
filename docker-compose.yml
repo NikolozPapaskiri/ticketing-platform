@@ -14,6 +14,9 @@ services:
       Jwt__SigningKey: DEV-ONLY-signing-key-ticketing-platform-local-0123456789
       PaymentProvider__BaseUrl: http://localhost:8080/dev-payment/
       FileStorage__Root: /var/ticketing/files
+      # Demo marketplace data (tenant + staff + published categorized events) so a fresh
+      # `docker compose up` demos instantly. Integration tests never set this flag.
+      Seed__DemoData: "true"
     volumes:
       - ticketfiles:/var/ticketing/files
     depends_on:

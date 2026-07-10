@@ -10,15 +10,27 @@ tagged so the progression is reviewable: `v1-naive`, `v2-clean`, `v2-eventdriven
 `v3-production`. The full plan and current status live in [CLAUDE.md](CLAUDE.md); Codex-facing
 handoff notes are mirrored in [AGENTS.md](AGENTS.md).
 
+## The product
+
+| Marketplace | Catalog | Event page |
+| --- | --- | --- |
+| ![Marketplace homepage](docs/screenshots/marketplace-home.png) | ![Concert catalog](docs/screenshots/catalog-concerts.png) | ![Event detail](docs/screenshots/event-detail.png) |
+
+Search-first marketplace across every organizer, icon category navigation, date-first browsing,
+image-led cards with SQL-computed price-from, and event pages with live SignalR availability and
+a full customer checkout (hold with TTL → pay → ticket PDF).
+
 ## Current status
 
-- Planned backend milestones are complete through `v3-production`.
-- Frontend milestones M0-M4 are complete in `apps/web`.
-- Current verified backend suite: 117 tests, 60 unit + 57 integration.
-- Current verified frontend checks: typecheck, lint, production build, npm audit, and Playwright
-  golden journey.
+- Planned backend milestones are complete through `v3-production`, plus the marketplace
+  catalog (categories, images, cross-tenant public browse).
+- Frontend milestones M0-M5 are complete in `apps/web` (M5 = the tkt.ge-style marketplace).
+- Current verified backend suite: 123 tests (60 unit + 63 integration).
+- Current verified frontend checks: typecheck, lint, production build, npm audit, and the
+  Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the
-  API root and returns 404 by design.
+  API root and returns 404 by design. `docker compose up -d --build` seeds a demo marketplace
+  (`Seed__DemoData`).
 
 ## Architecture
 

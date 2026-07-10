@@ -1,0 +1,48 @@
+# The Next.js web product. Server-side (BFF) calls reach the API through the in-cluster
+# Service DNS; NEXT_PUBLIC_* values are inlined at BUILD time by Next, so the image built for
+# this local cluster assumes the API is port-forwarded to localhost:5000 for the browser
+# (see the port-forward lines below). A real deployment builds the image per environment or
+# fronts both apps with one ingress host.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ticketing-web }
+  template:
+    metadata:
+      labels: { app: ticketing-web }
+    spec:
+      containers:
+        - name: web
+          image: ticketing-web:local   # docker build -t ticketing-web:local apps/web && kind load ...
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: API_BASE_URL
+              value: "http://ticketing-api"   # in-cluster service, port 80 -> 8080
+            - name: COOKIE_SECURE
+              value: "false"                  # local HTTP; keep secure cookies on under HTTPS
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ticketing-web
+spec:
+  selector: { app: ticketing-web }
+  ports:
+    - port: 80
+      targetPort: 3000
+  # Local access:
+  #   kubectl -n ticketing port-forward svc/ticketing-web 3000:80
+  #   kubectl -n ticketing port-forward svc/ticketing-api 5000:80   (browser-direct: SignalR + images)

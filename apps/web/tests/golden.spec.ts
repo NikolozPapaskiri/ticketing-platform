@@ -85,6 +85,7 @@ async function seedOnSaleEvent(request: APIRequestContext) {
       name: `Golden Journey ${suffix}`,
       description: "Seeded by Playwright.",
       venueName: "QA Hall",
+      category: "Concert",
       startsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     }
   });
@@ -143,6 +144,29 @@ test("customer can browse, register, hold, checkout, and see ticket download", a
   await page.getByRole("button", { name: /^checkout$/i }).click();
   await expect(page.getByText(/order confirmed/i)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("link", { name: /download ticket/i })).toBeVisible();
+});
+
+test("marketplace: search from the homepage leads to the event page with live checkout", async ({ page, request }) => {
+  const seeded = await seedOnSaleEvent(request);
+
+  // Enter via the marketplace homepage and use the real search form (plain GET, zero JS).
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /what are you going to see/i })).toBeVisible();
+  await page.getByRole("searchbox").first().fill(seeded.event.name);
+  await page.getByRole("searchbox").first().press("Enter");
+
+  // The catalog shows the seeded card with tenant identity and SQL-computed price-from.
+  await expect(page).toHaveURL(/\/events\?/);
+  const card = page.getByRole("link", { name: new RegExp(seeded.event.name, "i") });
+  await expect(card).toBeVisible();
+  await expect(page.getByText(/from \$25/i)).toBeVisible();
+
+  // Card -> tenant-agnostic event page with the checkout panel.
+  await card.click();
+  await expect(page).toHaveURL(new RegExp(`/events/${seeded.event.id}`));
+  await expect(page.getByRole("heading", { name: seeded.event.name })).toBeVisible();
+  await expect(page.getByRole("link", { name: seeded.tenant.name })).toBeVisible(); // organizer link
+  await expect(page.getByText(/tickets/i).first()).toBeVisible();
 });
 
 test("organizer staff cannot enter the platform admin portal", async ({ page, request, baseURL }) => {
