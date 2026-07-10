@@ -20,13 +20,25 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
     public bool FailNextOrderConfirmSave { get; set; }
     public AsyncGate IdempotencyClaimGate { get; } = new();
 
+    /// <summary>Blocks the save that flips a ticket to Scanned (concurrent-scan coordination).</summary>
+    public AsyncGate TicketScanGate { get; } = new();
+
+    /// <summary>Blocks the save that flips a hold to Released (concurrent-release coordination).</summary>
+    public AsyncGate HoldReleaseGate { get; } = new();
+
     public sealed class SimulatedCrashException : Exception
     {
         public SimulatedCrashException()
             : base("Simulated crash after provider success, before the confirmation commit.") { }
     }
 
-    public void Reset() => FailNextOrderConfirmSave = false;
+    public void Reset()
+    {
+        FailNextOrderConfirmSave = false;
+        IdempotencyClaimGate.Arm(0);
+        TicketScanGate.Arm(0);
+        HoldReleaseGate.Arm(0);
+    }
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
@@ -41,8 +53,20 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
         ThrowIfConfirming(eventData.Context);
         if (IsIdempotencyClaim(eventData.Context))
             await IdempotencyClaimGate.PassAsync(ct);
+        if (IsScanningTicket(eventData.Context))
+            await TicketScanGate.PassAsync(ct);
+        if (IsReleasingHold(eventData.Context))
+            await HoldReleaseGate.PassAsync(ct);
         return await base.SavingChangesAsync(eventData, result, ct);
     }
+
+    private static bool IsScanningTicket(DbContext? context) =>
+        context is not null && context.ChangeTracker.Entries<Ticket>()
+            .Any(e => e.State == EntityState.Modified && e.Entity.Status == TicketStatus.Scanned);
+
+    private static bool IsReleasingHold(DbContext? context) =>
+        context is not null && context.ChangeTracker.Entries<Hold>()
+            .Any(e => e.State == EntityState.Modified && e.Entity.Status == HoldStatus.Released);
 
     private void ThrowIfConfirming(DbContext? context)
     {

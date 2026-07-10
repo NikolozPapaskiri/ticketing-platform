@@ -20,6 +20,9 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
     /// <summary>Freeze a charge mid-flight to force an exact interleaving. Disarmed by default.</summary>
     public AsyncGate ChargeGate { get; } = new();
 
+    /// <summary>Freeze a refund mid-flight (the money-movement analogue of ChargeGate).</summary>
+    public AsyncGate RefundGate { get; } = new();
+
     public Func<PaymentCharge, PaymentResult> ChargeResponder { get; set; } = DefaultCharge;
 
     private static PaymentResult DefaultCharge(PaymentCharge c) => PaymentResult.Success($"ch_{Guid.NewGuid():N}");
@@ -35,6 +38,8 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
         _charges.Clear();
         _refundKeys.Clear();
         ChargeResponder = DefaultCharge;
+        ChargeGate.Arm(0);
+        RefundGate.Arm(0);
     }
 
     public async Task<PaymentResult> ChargeAsync(PaymentCharge charge, CancellationToken ct)
@@ -46,10 +51,11 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
         return result;
     }
 
-    public Task<PaymentResult> RefundAsync(PaymentRefund refund, CancellationToken ct)
+    public async Task<PaymentResult> RefundAsync(PaymentRefund refund, CancellationToken ct)
     {
+        await RefundGate.PassAsync(ct);          // deterministic interleaving seam
         _refundKeys.TryAdd(refund.IdempotencyKey, 0);
-        return Task.FromResult(PaymentResult.Success($"rf_{Guid.NewGuid():N}"));
+        return PaymentResult.Success($"rf_{Guid.NewGuid():N}");
     }
 
     public Task<PaymentInquiry> GetChargeStatusAsync(string idempotencyKey, CancellationToken ct) =>
