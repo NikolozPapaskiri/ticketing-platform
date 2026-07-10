@@ -63,6 +63,35 @@ public sealed class PaymentReconciliationTests
         Assert.Equal(1, _factory.Gateway.DistinctChargeCount); // reconciliation queries status, never re-charges
     }
 
+    [Fact]
+    public async Task Reconciler_SettlesStrandedRefund_WithoutRefundingTwice()
+    {
+        var (customerToken, holdId) = await ArrangeOnSaleHoldAsync();
+        var orderResponse = await PostOrderAsync(customerToken, holdId, "refund-crash");
+        orderResponse.EnsureSuccessStatusCode();
+        var orderId = (await orderResponse.Content.ReadFromJsonAsync<OrderDto>(ApiClientExtensions.Json))!.Id;
+
+        // The provider refunds, then the settle commit crashes: the order is stranded in
+        // RefundPending with the money already returned. The client does NOT retry.
+        _factory.Fault.FailNextRefundSettleSave = true;
+        var crashed = await _client.PostAsAsync(customerToken, $"/api/v1/customer/orders/{orderId}/refund");
+        Assert.Equal(HttpStatusCode.InternalServerError, crashed.StatusCode);
+        Assert.Equal(1, _factory.Gateway.DistinctRefundCount);
+
+        // The reconciler must finish the refund using the stable key - never a second refund.
+        var refunded = await PollAsync(async () => await OrdersInStatusAsync(orderId, OrderStatus.Refunded) == 1,
+            timeout: TimeSpan.FromSeconds(20));
+        Assert.True(refunded, "the reconciler never settled the stranded refund within 20s");
+        Assert.Equal(1, _factory.Gateway.DistinctRefundCount);
+    }
+
+    private async Task<int> OrdersInStatusAsync(Guid orderId, OrderStatus status)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        return await db.Orders.IgnoreQueryFilters().CountAsync(o => o.Id == orderId && o.Status == status);
+    }
+
     private async Task<(string CustomerToken, Guid HoldId)> ArrangeOnSaleHoldAsync()
     {
         var (_, staff) = await _client.CreateTenantWithStaffAsync();

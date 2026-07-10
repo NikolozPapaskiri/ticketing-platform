@@ -31,6 +31,11 @@ public interface IOrderRepository
     Task<IReadOnlyList<Guid>> GetOrderIdsWithExpiredPaymentLeaseAsync(
         DateTimeOffset now, int batchSize, CancellationToken ct);
 
+    /// <summary>Ids of RefundPending orders claimed before <paramref name="staleBefore"/> (a
+    /// refund that never settled). Cross-tenant.</summary>
+    Task<IReadOnlyList<Guid>> GetOrderIdsWithStaleRefundClaimAsync(
+        DateTimeOffset staleBefore, int batchSize, CancellationToken ct);
+
     /// <summary>The issued ticket document record, if the async issuer has produced one yet.</summary>
     Task<Ticket?> GetTicketAsync(Guid orderId, CancellationToken ct);
     Task<Ticket?> GetTicketForCustomerAsync(Guid orderId, Guid customerUserId, CancellationToken ct);

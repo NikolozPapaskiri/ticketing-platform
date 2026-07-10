@@ -72,6 +72,19 @@ public sealed class OrderRepository : IOrderRepository
             .Select(o => o.Id)
             .ToListAsync(ct);
 
+    public async Task<IReadOnlyList<Guid>> GetOrderIdsWithStaleRefundClaimAsync(
+        DateTimeOffset staleBefore, int batchSize, CancellationToken ct) =>
+        await _db.Orders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(o => o.Status == OrderStatus.RefundPending
+                        && o.RefundClaimedAt != null
+                        && o.RefundClaimedAt <= staleBefore)
+            .OrderBy(o => o.RefundClaimedAt)
+            .Take(batchSize)
+            .Select(o => o.Id)
+            .ToListAsync(ct);
+
     public Task<Ticket?> GetTicketAsync(Guid orderId, CancellationToken ct) =>
         _db.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
 
@@ -87,7 +100,9 @@ public sealed class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(ct);
 
     public Task<Ticket?> GetTicketForUpdateAsync(Guid orderId, CancellationToken ct) =>
-        _db.Tickets.FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
+        // Cross-tenant: the order id is globally unique, and the reconciler (no tenant) must be
+        // able to void the ticket when it settles a stranded refund.
+        _db.Tickets.IgnoreQueryFilters().FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
 
     public Task<Ticket?> GetTicketByCodeForUpdateAsync(string code, CancellationToken ct) =>
         _db.Tickets.FirstOrDefaultAsync(t => t.Code == code, ct);

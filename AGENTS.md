@@ -512,12 +512,13 @@ This block supersedes older phase-progress lines above if they disagree.
 - Atomic post-payment transitions (hardening plan PR 2) is DONE: refund claims Confirmed ->
   RefundPending with a stable refund:{orderId} key (customer + staff can't double-refund); ticket
   scan is an xmin compare-and-swap (one admission); hold release credits inventory once under a
-  race across all three strategies. Policy: a scanned ticket is non-refundable (409).
-  AddRefundPendingAndTicketConcurrency migration. Tail: per-strategy release tests + refund
-  reconciler. Next: PR 3 (RabbitMQ publisher confirms + topology + bounded retry).
-- Current verification: 137 backend tests (60 unit + 77 integration, incl. 6 waiting-room, 5
-  payment-race/reconciliation, and 3 refund/scan/release), plus frontend typecheck, lint,
-  production build, Playwright e2e, and a live API smoke.
+  race across all three strategies. Policy: a scanned ticket is non-refundable (409). The
+  reconciler also settles stranded refunds (RefundClaimedAt + stable key). AddRefundPendingAnd
+  TicketConcurrency + AddRefundClaimedAt migrations. Next: PR 3 (RabbitMQ publisher confirms +
+  topology + bounded retry).
+- Current verification: 140 backend tests (60 unit + 80 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, and 5 refund/scan/release across all three reservation strategies),
+  plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need

@@ -18,6 +18,10 @@ namespace TicketingPlatform.IntegrationTests.Support;
 public sealed class FaultInterceptor : SaveChangesInterceptor
 {
     public bool FailNextOrderConfirmSave { get; set; }
+
+    /// <summary>Crash the save that flips an order to Refunded (after the provider refunded).</summary>
+    public bool FailNextRefundSettleSave { get; set; }
+
     public AsyncGate IdempotencyClaimGate { get; } = new();
 
     /// <summary>Blocks the save that flips a ticket to Scanned (concurrent-scan coordination).</summary>
@@ -35,6 +39,7 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
     public void Reset()
     {
         FailNextOrderConfirmSave = false;
+        FailNextRefundSettleSave = false;
         IdempotencyClaimGate.Arm(0);
         TicketScanGate.Arm(0);
         HoldReleaseGate.Arm(0);
@@ -70,18 +75,25 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
 
     private void ThrowIfConfirming(DbContext? context)
     {
-        if (!FailNextOrderConfirmSave || context is null)
+        if (context is null)
             return;
 
-        var confirming = context.ChangeTracker.Entries<Order>()
-            .Any(e => e.State is EntityState.Added or EntityState.Modified
-                      && e.Entity.Status == OrderStatus.Confirmed);
-        if (!confirming)
-            return;
+        if (FailNextOrderConfirmSave && HasOrderInStatus(context, OrderStatus.Confirmed))
+        {
+            FailNextOrderConfirmSave = false; // fire exactly once
+            throw new SimulatedCrashException();
+        }
 
-        FailNextOrderConfirmSave = false; // fire exactly once
-        throw new SimulatedCrashException();
+        if (FailNextRefundSettleSave && HasOrderInStatus(context, OrderStatus.Refunded))
+        {
+            FailNextRefundSettleSave = false;
+            throw new SimulatedCrashException();
+        }
     }
+
+    private static bool HasOrderInStatus(DbContext context, OrderStatus status) =>
+        context.ChangeTracker.Entries<Order>()
+            .Any(e => e.State is EntityState.Added or EntityState.Modified && e.Entity.Status == status);
 
     private static bool IsIdempotencyClaim(DbContext? context)
     {

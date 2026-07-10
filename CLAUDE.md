@@ -532,11 +532,11 @@ This block supersedes older phase-progress lines above if they disagree.
   admission); hold release credits inventory exactly once under a race (optimistic no longer
   re-credits on a hold-row conflict; pessimistic/redis roll back idempotently). **Policy: a
   scanned ticket is non-refundable** (409). `AddRefundPendingAndTicketConcurrency` migration.
-  Open PR-2 tail: per-strategy release-race tests + a refund reconciler. Next: PR 3 (RabbitMQ
+  Next: PR 3 (RabbitMQ
   publisher confirms + topology + bounded retry).
-- Current verification: 137 backend tests (60 unit + 77 integration, incl. 6 waiting-room, 5
-  payment-race/reconciliation, and 3 refund/scan/release), plus frontend typecheck, lint,
-  production build, Playwright e2e (4), and live API smoke.
+- Current verification: 140 backend tests (60 unit + 80 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, and 5 refund/scan/release across all three reservation strategies),
+  plus frontend typecheck, lint, production build, Playwright e2e (4), and live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need

@@ -322,7 +322,7 @@ public sealed class OrderService
         // Atomically claim Confirmed -> RefundPending BEFORE the provider call. The order's
         // concurrency token means only one caller wins the claim; the loser resolves to this
         // same order and re-attempts the provider with the SAME stable key (idempotent).
-        order.MarkRefundPending();
+        order.MarkRefundPending(now);
         if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
         {
             var current = await _orders.GetForRefundAsync(orderId, ct);
@@ -337,6 +337,20 @@ public sealed class OrderService
         }
 
         return await SettleRefundAsync(order, tenantId, actorKey, now, ct);
+    }
+
+    /// <summary>
+    /// Resume a refund that was claimed but never settled (crash / lost response). Called by the
+    /// reconciler; safe under multiple replicas because the settle is concurrency-token-guarded
+    /// and the provider key is stable (querying/retrying never refunds twice).
+    /// </summary>
+    public async Task ResumeRefundAsync(Guid orderId, CancellationToken ct)
+    {
+        // Cross-tenant load: the reconciler runs in a background scope with no tenant set.
+        var order = await _orders.GetOrderWithHoldForUpdateAsync(orderId, ct);
+        if (order is null || order.Status != OrderStatus.RefundPending)
+            return; // already settled by the client's retry or another replica
+        await SettleRefundAsync(order, order.TenantId, "reconciler", _clock.GetUtcNow(), ct);
     }
 
     /// <summary>

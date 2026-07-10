@@ -35,6 +35,9 @@ public class Order
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? RefundedAt { get; private set; }
 
+    /// <summary>When a refund was claimed (RefundPending). Lets the reconciler find stuck refunds.</summary>
+    public DateTimeOffset? RefundClaimedAt { get; private set; }
+
     public void MarkConfirmed(string providerChargeId)
     {
         if (Status != OrderStatus.PendingPayment)
@@ -55,11 +58,12 @@ public class Order
     /// row's concurrency token so only one caller (customer or staff) owns the money movement;
     /// the loser resolves to this same order instead of issuing a second provider refund.
     /// </summary>
-    public void MarkRefundPending()
+    public void MarkRefundPending(DateTimeOffset now)
     {
         if (Status != OrderStatus.Confirmed)
             throw new InvalidOperationException($"Cannot start a refund for an order in status '{Status}'.");
         Status = OrderStatus.RefundPending;
+        RefundClaimedAt = now;
     }
 
     public void MarkRefunded(string providerRefundId, DateTimeOffset refundedAt)

@@ -27,7 +27,7 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
 - Frontend milestones M0-M6 are complete in `apps/web` (M5 = the tkt.ge-style marketplace,
   M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
   position pushes, 429-enforced checkout on gated events).
-- Current verified backend suite: 137 tests (60 unit + 77 integration).
+- Current verified backend suite: 140 tests (60 unit + 80 integration).
 - The three oversell-prevention strategies are load-tested head-to-head under flash-sale
   concurrency — zero oversell across all three; numbers and analysis in
   [docs/LOAD_TEST.md](docs/LOAD_TEST.md).

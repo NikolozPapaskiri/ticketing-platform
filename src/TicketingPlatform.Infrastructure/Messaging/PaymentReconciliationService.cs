@@ -60,35 +60,45 @@ public sealed class PaymentReconciliationService : BackgroundService
 
     private async Task ReconcileBatchAsync(CancellationToken ct)
     {
-        IReadOnlyList<Guid> ids;
+        var now = _clock.GetUtcNow();
+        IReadOnlyList<Guid> pendingPayments;
+        IReadOnlyList<Guid> pendingRefunds;
         using (var scope = _scopes.CreateScope())
         {
             var repo = scope.ServiceProvider.GetRequiredService<IOrderRepository>();
-            ids = await repo.GetOrderIdsWithExpiredPaymentLeaseAsync(_clock.GetUtcNow(), BatchSize, ct);
+            pendingPayments = await repo.GetOrderIdsWithExpiredPaymentLeaseAsync(now, BatchSize, ct);
+            // Reuse the payment lease as the refund-claim staleness window.
+            pendingRefunds = await repo.GetOrderIdsWithStaleRefundClaimAsync(now - _options.PaymentLease, BatchSize, ct);
         }
 
-        if (ids.Count == 0)
-            return;
-
-        var reconciled = 0;
-        foreach (var id in ids)
+        var payments = 0;
+        foreach (var id in pendingPayments)
         {
             // A fresh scope per order keeps each reconciliation's transaction independent.
             using var scope = _scopes.CreateScope();
             var repo = scope.ServiceProvider.GetRequiredService<IOrderRepository>();
             var orders = scope.ServiceProvider.GetRequiredService<OrderService>();
-            var payments = scope.ServiceProvider.GetRequiredService<IPaymentGateway>();
+            var gateway = scope.ServiceProvider.GetRequiredService<IPaymentGateway>();
 
             var order = await repo.GetOrderWithHoldForUpdateAsync(id, ct);
             if (order is null || order.Status != OrderStatus.PendingPayment)
                 continue; // already settled by the client's retry or another replica
 
-            var inquiry = await payments.GetChargeStatusAsync(id.ToString(), ct);
+            var inquiry = await gateway.GetChargeStatusAsync(id.ToString(), ct);
             await orders.ApplyInquiryAsync(order, inquiry, ct);
-            reconciled++;
+            payments++;
         }
 
-        if (reconciled > 0)
-            _logger.LogInformation("Reconciled {Count} pending payment(s)", reconciled);
+        var refunds = 0;
+        foreach (var id in pendingRefunds)
+        {
+            using var scope = _scopes.CreateScope();
+            var orders = scope.ServiceProvider.GetRequiredService<OrderService>();
+            await orders.ResumeRefundAsync(id, ct); // stable key => re-driving never refunds twice
+            refunds++;
+        }
+
+        if (payments > 0 || refunds > 0)
+            _logger.LogInformation("Reconciled {Payments} pending payment(s) and {Refunds} pending refund(s)", payments, refunds);
     }
 }

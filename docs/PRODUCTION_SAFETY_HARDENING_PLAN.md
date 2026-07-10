@@ -287,15 +287,15 @@ Do not start the refund/scan work until all of the following are true:
 
 **Status: DONE** (branch `feature/atomic-state-transitions`). Red suite `test: expose concurrent
 refund, scan, and release races` → `feat: make refund, ticket scan, and hold release atomic` →
-this docs update. 137 tests green. Scanned-ticket policy chosen: **non-refundable** (recorded in
-`docs/ARCHITECTURE.md`). Notes: refund uses a stable `refund:{orderId}` key + `Confirmed →
-RefundPending` claim (actor kept only in the audit event); ticket scan is an `xmin` compare-and-
-swap; the optimistic release no longer re-credits on a hold-row conflict, and pessimistic/redis
-releases roll back idempotently. **Still open from this PR's gate:** per-strategy release-race
-tests (only the default optimistic strategy is currently exercised by `ConcurrentRelease_*`), a
-dedicated crash-after-refund reconciliation test, and a background refund reconciler for a
-client that never retries (today an ambiguous refund is safe to re-drive via the stable key but
-relies on a retry). Next: PR 3 (RabbitMQ publisher confirms + topology + bounded consumer retry).
+docs → `feat: refund reconciler + per-strategy release tests`. 140 tests green. Scanned-ticket
+policy: **non-refundable** (recorded in `docs/ARCHITECTURE.md`). Refund uses a stable
+`refund:{orderId}` key + `Confirmed → RefundPending` claim (actor only in the audit event);
+ticket scan is an `xmin` compare-and-swap; the optimistic release no longer re-credits on a
+hold-row conflict, and pessimistic/redis releases roll back idempotently. The gate is fully met:
+the `ConcurrentRelease_*` suite now runs against **all three** strategies, and the
+`PaymentReconciliationService` also settles stranded refunds (`RefundClaimedAt` + stale-claim
+scan; re-driving uses the stable key so money never moves twice), with a crash-after-refund test.
+Next: PR 3 (RabbitMQ publisher confirms + topology + bounded consumer retry).
 
 Suggested branch: `feature/atomic-state-transitions`
 
