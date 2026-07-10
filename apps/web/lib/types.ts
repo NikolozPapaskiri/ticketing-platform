@@ -41,6 +41,26 @@ export type PublicEvent = {
   ticketTypes: TicketType[];
 };
 
+export type MarketplaceEvent = {
+  id: string;
+  name: string;
+  venueName: string | null;
+  startsAt: string;
+  category: string;
+  tenantName: string;
+  tenantSlug: string;
+  priceFrom: number | null;
+  currency: string | null;
+  hasImage: boolean;
+};
+
+export type MarketplaceEventDetail = PublicEvent & {
+  category: string;
+  tenantName: string;
+  tenantSlug: string;
+  hasImage: boolean;
+};
+
 export type EventDetail = PublicEvent & {
   status: string;
 };

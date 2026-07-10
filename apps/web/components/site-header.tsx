@@ -29,6 +29,9 @@ export function SiteHeader() {
           <span>Ticketing</span>
         </Link>
         <nav className="flex items-center gap-2">
+          <Link href="/events" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+            Events
+          </Link>
           <Link href="/account" className={buttonVariants({ variant: "ghost", size: "sm" })}>
             Account
           </Link>
