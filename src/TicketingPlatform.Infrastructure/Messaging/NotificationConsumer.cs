@@ -68,18 +68,7 @@ public sealed class NotificationConsumer : BackgroundService
         await using var connection = await factory.CreateConnectionAsync(ct);
         await using var channel = await connection.CreateChannelAsync(cancellationToken: ct);
 
-        // Topology: main topic exchange, a dead-letter exchange + parked queue, and the
-        // notifications queue whose rejects flow to the DLX.
-        await channel.ExchangeDeclareAsync(_options.Exchange, ExchangeType.Topic, durable: true, cancellationToken: ct);
-        await channel.ExchangeDeclareAsync(_options.DeadLetterExchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
-        await channel.QueueDeclareAsync("ticketing-dead-letter", durable: true, exclusive: false, autoDelete: false, cancellationToken: ct);
-        await channel.QueueBindAsync("ticketing-dead-letter", _options.DeadLetterExchange, string.Empty, cancellationToken: ct);
-
-        await channel.QueueDeclareAsync("notifications", durable: true, exclusive: false, autoDelete: false,
-            arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = _options.DeadLetterExchange },
-            cancellationToken: ct);
-        await channel.QueueBindAsync("notifications", _options.Exchange, routingKey: "OrderConfirmed", cancellationToken: ct);
-
+        await RabbitMqTopology.DeclareAsync(channel, _options, ct);
         await channel.BasicQosAsync(0, prefetchCount: 1, global: false, ct); // one message at a time
 
         var consumer = new AsyncEventingBasicConsumer(channel);
@@ -98,7 +87,7 @@ public sealed class NotificationConsumer : BackgroundService
             }
         };
 
-        await channel.BasicConsumeAsync("notifications", autoAck: false, consumer, ct);
+        await channel.BasicConsumeAsync(RabbitMqTopology.NotificationsQueue, autoAck: false, consumer, ct);
 
         // Hold the connection open until shutdown; messages arrive on the consumer callback.
         await Task.Delay(Timeout.InfiniteTimeSpan, ct);
@@ -111,8 +100,9 @@ public sealed class NotificationConsumer : BackgroundService
         string? traceParent = null;
         if (ea.BasicProperties.Headers?.TryGetValue("traceparent", out var raw) == true && raw is byte[] bytes)
             traceParent = Encoding.UTF8.GetString(bytes);
+        var eventType = ea.RoutingKey; // "OrderConfirmed" or "OrderRefunded"
         using var activity = MessagingDiagnostics.Source.StartActivity(
-            "consume OrderConfirmed", System.Diagnostics.ActivityKind.Consumer, traceParent);
+            $"consume {eventType}", System.Diagnostics.ActivityKind.Consumer, traceParent);
 
         var messageId = Guid.Parse(ea.BasicProperties.MessageId!);
 
@@ -126,13 +116,14 @@ public sealed class NotificationConsumer : BackgroundService
 
         using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
         var root = payload.RootElement;
+        var verb = eventType == "OrderRefunded" ? "refunded" : "confirmed";
 
         db.Notifications.Add(new Notification
         {
             Id = Guid.NewGuid(),
             TenantId = root.GetProperty("tenantId").GetGuid(),
-            Type = "OrderConfirmed",
-            Message = $"Order {root.GetProperty("orderId").GetGuid()} confirmed for " +
+            Type = eventType,
+            Message = $"Order {root.GetProperty("orderId").GetGuid()} {verb} for " +
                       $"{root.GetProperty("customerEmail").GetString()}: " +
                       $"{root.GetProperty("amount").GetDecimal()} {root.GetProperty("currency").GetString()}",
             CreatedAt = DateTimeOffset.UtcNow

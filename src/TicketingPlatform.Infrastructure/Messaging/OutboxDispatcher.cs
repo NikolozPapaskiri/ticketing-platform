@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 using System.Text;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Infrastructure.Persistence;
@@ -55,9 +56,10 @@ public sealed class OutboxDispatcher : BackgroundService
             catch (Exception ex)
             {
                 // Broker down / DB blip: log, back off, keep living. A dispatcher that dies
-                // silently strands every event in the outbox.
+                // silently strands every event in the outbox. EnsureChannelAsync disposes and
+                // rebuilds the broken channel on the next tick (the claim's lock expires so the
+                // unconfirmed rows are re-dispatched).
                 _logger.LogError(ex, "Outbox dispatch failed; retrying shortly");
-                _channel = null; _connection = null;
                 try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
                 catch (OperationCanceledException) { break; }
             }
@@ -76,6 +78,7 @@ public sealed class OutboxDispatcher : BackgroundService
 
         var channel = await EnsureChannelAsync(ct);
 
+        var confirmed = 0;
         foreach (var message in batch)
         {
             // Continue the originating request's trace across the async boundary (Producer span).
@@ -91,23 +94,44 @@ public sealed class OutboxDispatcher : BackgroundService
                     : new Dictionary<string, object?> { ["traceparent"] = activity.Id }
             };
 
-            await channel.BasicPublishAsync(
-                exchange: _options.Exchange,
-                routingKey: message.Type,
-                mandatory: false,
-                basicProperties: properties,
-                body: Encoding.UTF8.GetBytes(message.Payload),
-                cancellationToken: ct);
+            try
+            {
+                // Publisher confirms + tracking are enabled on the channel, so this await does not
+                // complete until RabbitMQ has ACKED the publish. mandatory:true means an unroutable
+                // message (no binding) is RETURNED and surfaces as a PublishException instead of
+                // being silently dropped. A row is marked processed ONLY after that confirmation -
+                // the outbox never lies about delivery.
+                await channel.BasicPublishAsync(
+                    exchange: _options.Exchange,
+                    routingKey: message.Type,
+                    mandatory: true,
+                    basicProperties: properties,
+                    body: Encoding.UTF8.GetBytes(message.Payload),
+                    cancellationToken: ct);
 
-            message.ProcessedAt = DateTimeOffset.UtcNow;
-            message.Attempts++;
-            message.LockedBy = null;
-            message.LockedUntil = null;
+                message.ProcessedAt = DateTimeOffset.UtcNow;
+                message.Attempts++;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+                confirmed++;
+            }
+            catch (PublishException ex)
+            {
+                // Unroutable (no binding) or nacked by the broker: leave the row UNPROCESSED and
+                // release its claim so it is retried. A returned message means a real topology gap
+                // - visible and recoverable, never a silent loss.
+                message.Attempts++;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+                _logger.LogWarning(ex, "Outbox message {MessageId} ({Type}) was not confirmed (returned={Returned}); left for retry",
+                    message.Id, message.Type, ex.IsReturn);
+            }
         }
 
         await db.SaveChangesAsync(ct);
-        TicketingMetrics.OutboxPublished.Add(batch.Count);
-        _logger.LogInformation("Dispatched {Count} outbox message(s)", batch.Count);
+        if (confirmed > 0)
+            TicketingMetrics.OutboxPublished.Add(confirmed);
+        _logger.LogInformation("Dispatched {Confirmed}/{Total} outbox message(s)", confirmed, batch.Count);
     }
 
     private async Task<List<TicketingPlatform.Infrastructure.Outbox.OutboxMessage>> ClaimBatchAsync(
@@ -147,6 +171,12 @@ public sealed class OutboxDispatcher : BackgroundService
         if (_channel is { IsOpen: true })
             return _channel;
 
+        // Dispose a broken channel/connection rather than just dropping the reference.
+        if (_channel is not null) await _channel.DisposeAsync();
+        if (_connection is not null) await _connection.DisposeAsync();
+        _channel = null;
+        _connection = null;
+
         var factory = new ConnectionFactory
         {
             HostName = _options.HostName,
@@ -156,8 +186,13 @@ public sealed class OutboxDispatcher : BackgroundService
         };
 
         _connection = await factory.CreateConnectionAsync(ct);
-        _channel = await _connection.CreateChannelAsync(cancellationToken: ct);
-        await _channel.ExchangeDeclareAsync(_options.Exchange, ExchangeType.Topic, durable: true, cancellationToken: ct);
+        // Publisher confirms WITH tracking: BasicPublishAsync then awaits the broker's ack and
+        // throws on nack/return, which is what lets us mark rows processed only when truly durable.
+        _channel = await _connection.CreateChannelAsync(
+            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
+            ct);
+        // Defensive re-declare; the topology initializer already declared everything at startup.
+        await RabbitMqTopology.DeclareAsync(_channel, _options, ct);
         return _channel;
     }
 
