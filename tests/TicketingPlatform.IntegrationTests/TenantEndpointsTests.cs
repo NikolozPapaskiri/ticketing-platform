@@ -62,6 +62,19 @@ public class TenantEndpointsTests
     }
 
     [Fact]
+    public async Task PublicList_Anonymous_ReturnsCreatedTenants()
+    {
+        var adminToken = await _client.LoginAsAdminAsync();
+        var created = await _client.CreateTenantAsync(adminToken);
+
+        var response = await _client.GetAsync("/api/v1/public/tenants");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var tenants = await response.Content.ReadFromJsonAsync<List<TenantDto>>(ApiClientExtensions.Json);
+        Assert.Contains(tenants!, t => t.Id == created.Id);
+    }
+
+    [Fact]
     public async Task Tenants_WithoutToken_Returns401()
     {
         var response = await _client.GetAsync("/api/v1/tenants");

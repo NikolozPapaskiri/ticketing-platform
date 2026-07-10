@@ -88,6 +88,27 @@ public class RealtimeAvailabilityTests
         Assert.Equal(15, push.Available);
     }
 
+    [Fact]
+    public async Task Cors_IsScopedToAvailabilityHub()
+    {
+        var hubPreflight = new HttpRequestMessage(HttpMethod.Options, "/hubs/availability/negotiate?negotiateVersion=1");
+        hubPreflight.Headers.Add("Origin", "http://localhost:3000");
+        hubPreflight.Headers.Add("Access-Control-Request-Method", "POST");
+        hubPreflight.Headers.Add("Access-Control-Request-Headers", "content-type");
+
+        var hubResponse = await _client.SendAsync(hubPreflight);
+
+        Assert.True(hubResponse.Headers.TryGetValues("Access-Control-Allow-Origin", out var hubOrigins));
+        Assert.Contains("http://localhost:3000", hubOrigins);
+
+        var restRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/public/tenants");
+        restRequest.Headers.Add("Origin", "http://localhost:3000");
+
+        var restResponse = await _client.SendAsync(restRequest);
+
+        Assert.False(restResponse.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
     private static async Task<int?> PollAsync(Func<Task<int?>> read, Func<int?, bool> done)
     {
         int? value = null;

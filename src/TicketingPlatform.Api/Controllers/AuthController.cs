@@ -1,7 +1,10 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Application.Services;
@@ -17,6 +20,29 @@ public class AuthController : ControllerBase
 {
     private readonly AuthService _auth;
     public AuthController(AuthService auth) => _auth = auth;
+
+    [HttpGet("me")]
+    [Authorize]
+    public ActionResult<UserResponse> Me()
+    {
+        var sub = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        var email = User.FindFirstValue(JwtRegisteredClaimNames.Email) ?? User.FindFirstValue(ClaimTypes.Email);
+        var role = User.FindFirstValue("role") ?? User.FindFirstValue(ClaimTypes.Role);
+
+        if (!Guid.TryParse(sub, out var userId) || email is null || role is null)
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid authenticated principal");
+
+        Guid? tenantId = null;
+        var tenantClaim = User.FindFirstValue(TenantResolutionMiddleware.TenantClaim);
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var parsedTenantId))
+                return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid tenant claim");
+            tenantId = parsedTenantId;
+        }
+
+        return Ok(new UserResponse(userId, email, role, tenantId));
+    }
 
     /// <summary>Self-service signup. Always creates a Customer - the role is never client-supplied.</summary>
     [HttpPost("register")]

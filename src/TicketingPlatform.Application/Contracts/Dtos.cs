@@ -6,6 +6,7 @@ public record TenantResponse(Guid Id, string Name, string Slug);
 
 // Event
 public record CreateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt);
+public record UpdateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt);
 public record EventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt, string Status);
 public record EventResponse(
     Guid Id,
@@ -45,6 +46,7 @@ public record HoldResponse(
 
 // Order (the booking saga)
 public record CreateOrderRequest(Guid HoldId, string CustomerEmail);
+public record CreateCustomerOrderRequest(Guid HoldId);
 public record OrderResponse(
     Guid Id,
     Guid HoldId,
@@ -52,6 +54,7 @@ public record OrderResponse(
     decimal Amount,
     string Currency,
     string Status);
+public record RefundOrderRequest(string? Reason);
 
 // Availability read model (CQRS query side)
 public record TicketAvailabilityResponse(
@@ -60,6 +63,24 @@ public record TicketAvailabilityResponse(
     int Available,
     int Total,
     DateTimeOffset UpdatedAt);
+
+// Public catalog
+public record PublicEventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt);
+public record PublicEventResponse(
+    Guid Id,
+    string Name,
+    string? Description,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    IReadOnlyList<TicketTypeResponse> TicketTypes);
+
+// Ticket validation
+public record ValidateTicketRequest(string Code);
+public record TicketValidationResponse(
+    Guid TicketId,
+    Guid OrderId,
+    string Status,
+    DateTimeOffset? ScannedAt);
 
 public record PagedResponse<T>(
     IReadOnlyList<T> Items,

@@ -96,6 +96,16 @@ public class EventsController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = response.Id }, response);
     }
 
+    [HttpPut("{id:guid}")]
+    public async Task<ActionResult<EventResponse>> Update(Guid id, UpdateEventRequest request, CancellationToken ct)
+    {
+        if (!_tenant.HasTenant)
+            return MissingTenant();
+
+        var result = await _events.UpdateAsync(_tenant.TenantId!.Value, id, request, ct);
+        return result.IsSuccess ? Ok(result.Value) : NotFound();
+    }
+
     [HttpPost("{eventId:guid}/ticket-types")]
     public async Task<ActionResult<TicketTypeResponse>> AddTicketType(
         Guid eventId,

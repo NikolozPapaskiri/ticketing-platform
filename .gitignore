@@ -2,6 +2,7 @@
 bin/
 obj/
 out/
+.artifacts/
 [Dd]ebug/
 [Rr]elease/
 
@@ -23,3 +24,15 @@ Thumbs.db
 # Local env
 *.env
 appsettings.*.local.json
+.aspnet/
+src/TicketingPlatform.Api/data/
+
+# Node / Next.js
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+playwright-report/
+test-results/
+*screenshot*.log

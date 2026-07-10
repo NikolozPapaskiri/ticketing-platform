@@ -11,6 +11,8 @@ data:
   ConnectionStrings__Default: "Host=postgres;Port=5432;Database=ticketing;Username=ticketing;Password=ticketing"
   ConnectionStrings__Redis: "redis:6379"
   RabbitMq__HostName: "rabbitmq"
+  PaymentProvider__BaseUrl: "http://localhost:8080/dev-payment/"
+  FileStorage__Root: "/var/ticketing/files"
 ---
 # Secrets go in a Secret, not the ConfigMap - even though in this LOCAL manifest the value is
 # the committed dev key, the shape is right: production replaces this object from a vault

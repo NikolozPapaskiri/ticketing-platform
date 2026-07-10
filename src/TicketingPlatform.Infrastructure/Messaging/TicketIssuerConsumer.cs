@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -111,6 +112,13 @@ public sealed class TicketIssuerConsumer : BackgroundService
         using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
         var orderId = payload.RootElement.GetProperty("orderId").GetGuid();
 
+        if (await db.Tickets.IgnoreQueryFilters().AnyAsync(t => t.OrderId == orderId, ct))
+        {
+            db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, Consumer = consumerName, ProcessedAt = DateTimeOffset.UtcNow });
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
         // Re-read the full graph from the source of truth (background scope: IgnoreQueryFilters).
         var order = await db.Orders
             .IgnoreQueryFilters()
@@ -121,6 +129,7 @@ public sealed class TicketIssuerConsumer : BackgroundService
             return;
 
         var generator = scope.ServiceProvider.GetRequiredService<ITicketDocumentGenerator>();
+        var code = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         var pdf = generator.Generate(new TicketDocumentData(
             order.Id,
             order.Hold.TicketType.Event.Name,
@@ -129,6 +138,7 @@ public sealed class TicketIssuerConsumer : BackgroundService
             order.Hold.TicketType.Name,
             order.Hold.Quantity,
             order.CustomerEmail,
+            code,
             order.Amount,
             order.Currency));
 
@@ -141,6 +151,7 @@ public sealed class TicketIssuerConsumer : BackgroundService
             Id = Guid.NewGuid(),
             TenantId = order.TenantId,
             OrderId = order.Id,
+            Code = code,
             FilePath = path,
             CreatedAt = DateTimeOffset.UtcNow
         });

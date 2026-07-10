@@ -9,9 +9,11 @@ namespace TicketingPlatform.Application.Abstractions;
 public interface IPaymentGateway
 {
     Task<PaymentResult> ChargeAsync(PaymentCharge charge, CancellationToken ct);
+    Task<PaymentResult> RefundAsync(PaymentRefund refund, CancellationToken ct);
 }
 
 public sealed record PaymentCharge(string IdempotencyKey, decimal Amount, string Currency);
+public sealed record PaymentRefund(string IdempotencyKey, string ProviderChargeId, decimal Amount, string Currency);
 
 public enum PaymentFailure
 {

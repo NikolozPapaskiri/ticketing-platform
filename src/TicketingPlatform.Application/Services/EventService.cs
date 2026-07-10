@@ -47,6 +47,49 @@ public sealed class EventService
         return new PagedResponse<EventListItemResponse>(items, page, pageSize, totalCount, totalPages);
     }
 
+    public async Task<Result<PagedResponse<PublicEventListItemResponse>>> ListPublicAsync(
+        string tenantSlug, int page, int pageSize, CancellationToken ct)
+    {
+        var tenant = await _events.GetTenantBySlugAsync(tenantSlug, ct);
+        if (tenant is null)
+            return Result<PagedResponse<PublicEventListItemResponse>>.NotFound($"Tenant '{tenantSlug}' was not found.");
+
+        var totalCount = await _events.CountPublicOnSaleAsync(tenant.Id, ct);
+        var events = await _events.ListPublicOnSaleAsync(tenant.Id, page, pageSize, ct);
+        var items = events
+            .Select(e => new PublicEventListItemResponse(e.Id, e.Name, e.VenueName, e.StartsAt))
+            .ToList();
+
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+        return Result<PagedResponse<PublicEventListItemResponse>>.Success(
+            new PagedResponse<PublicEventListItemResponse>(items, page, pageSize, totalCount, totalPages));
+    }
+
+    public async Task<Result<PublicEventResponse>> GetPublicByIdAsync(
+        string tenantSlug, Guid eventId, CancellationToken ct)
+    {
+        var tenant = await _events.GetTenantBySlugAsync(tenantSlug, ct);
+        if (tenant is null)
+            return Result<PublicEventResponse>.NotFound($"Tenant '{tenantSlug}' was not found.");
+
+        var ev = await _events.GetPublicOnSaleWithGraphAsync(tenant.Id, eventId, ct);
+        return ev is null
+            ? Result<PublicEventResponse>.NotFound($"Event '{eventId}' was not found.")
+            : Result<PublicEventResponse>.Success(new PublicEventResponse(
+                ev.Id,
+                ev.Name,
+                ev.Description,
+                ev.VenueName,
+                ev.StartsAt,
+                ev.TicketTypes.Select(tt => new TicketTypeResponse(
+                    tt.Id,
+                    tt.Name,
+                    tt.Price,
+                    tt.Currency,
+                    tt.Inventory.TotalQuantity,
+                    tt.Inventory.AvailableQuantity)).ToList()));
+    }
+
     public async Task<Result<EventResponse>> GetByIdAsync(Guid tenantId, Guid id, CancellationToken ct)
     {
         // Cache-aside: check cache -> on miss load from the DB and populate with a TTL.
@@ -83,6 +126,20 @@ public sealed class EventService
 
         return new EventResponse(
             ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(), []);
+    }
+
+    public async Task<Result<EventResponse>> UpdateAsync(Guid tenantId, Guid id, UpdateEventRequest request, CancellationToken ct)
+    {
+        var ev = await _events.GetForUpdateAsync(id, ct);
+        if (ev is null)
+            return Result<EventResponse>.NotFound($"Event '{id}' was not found.");
+
+        ev.UpdateDetails(request.Name, request.Description, request.VenueName, request.StartsAt);
+        await _events.SaveChangesAsync(ct);
+
+        await _cache.RemoveAsync(EventGraphKey(tenantId, id), ct);
+        return Result<EventResponse>.Success(new EventResponse(
+            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(), []));
     }
 
     public async Task<Result<TicketTypeResponse>> AddTicketTypeAsync(

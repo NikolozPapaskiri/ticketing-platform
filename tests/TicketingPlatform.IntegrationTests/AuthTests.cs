@@ -27,6 +27,22 @@ public class AuthTests
 
         var token = await _client.LoginAsync(email, "Secret123$");
         Assert.False(string.IsNullOrWhiteSpace(token));
+
+        var meResponse = await _client.GetAsAsync(token, "/api/v1/auth/me");
+        Assert.Equal(HttpStatusCode.OK, meResponse.StatusCode);
+        var me = await meResponse.Content.ReadFromJsonAsync<UserDto>(ApiClientExtensions.Json);
+        Assert.Equal(user.Id, me!.Id);
+        Assert.Equal(email, me.Email);
+        Assert.Equal("Customer", me.Role);
+        Assert.Null(me.TenantId);
+    }
+
+    [Fact]
+    public async Task Me_WithoutToken_Returns401()
+    {
+        var response = await _client.GetAsync("/api/v1/auth/me");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

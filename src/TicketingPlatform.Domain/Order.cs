@@ -14,6 +14,12 @@ public class Order
     public Guid HoldId { get; set; }
     public Hold Hold { get; set; } = null!;
 
+    /// <summary>
+    /// Set for self-service customer checkout. Null for organizer staff box-office sales.
+    /// This is the ownership column behind customer resource-based authorization.
+    /// </summary>
+    public Guid? CustomerUserId { get; set; }
+
     public required string CustomerEmail { get; set; }
     public decimal Amount { get; set; }
     public required string Currency { get; set; }
@@ -23,7 +29,11 @@ public class Order
     /// <summary>The provider's charge id - the audit link between our order and their money movement.</summary>
     public string? ProviderChargeId { get; private set; }
 
+    /// <summary>The provider's refund id - null until a confirmed order is refunded.</summary>
+    public string? ProviderRefundId { get; private set; }
+
     public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? RefundedAt { get; private set; }
 
     public void MarkConfirmed(string providerChargeId)
     {
@@ -39,11 +49,21 @@ public class Order
             throw new InvalidOperationException($"Cannot fail an order in status '{Status}'.");
         Status = OrderStatus.PaymentFailed;
     }
+
+    public void MarkRefunded(string providerRefundId, DateTimeOffset refundedAt)
+    {
+        if (Status != OrderStatus.Confirmed)
+            throw new InvalidOperationException($"Cannot refund an order in status '{Status}'.");
+        Status = OrderStatus.Refunded;
+        ProviderRefundId = providerRefundId;
+        RefundedAt = refundedAt;
+    }
 }
 
 public enum OrderStatus
 {
     PendingPayment,
     Confirmed,
-    PaymentFailed
+    PaymentFailed,
+    Refunded
 }

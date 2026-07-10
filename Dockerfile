@@ -20,6 +20,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app .
 
+# Writable app data root for the non-root runtime user. Named Docker volumes inherit this
+# ownership on first use; Kubernetes sets fsGroup for mounted volumes.
+RUN mkdir -p /var/ticketing/files && chown -R $APP_UID:$APP_UID /var/ticketing
+
 # Non-root: the base image ships an unprivileged 'app' user; a container escape lands
 # without root. Port 8080 because binding <1024 needs privileges we just gave up.
 ENV ASPNETCORE_URLS=http://+:8080

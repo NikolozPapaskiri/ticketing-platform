@@ -396,7 +396,8 @@ This is the real setup, including things learned the hard way. It is not the sam
 - PostgreSQL 17 in Docker via `docker compose up -d`.
 - **Host port is 5433, not 5432.** A native PostgreSQL service already owns 5432 on the dev machine and silently intercepts connections (causes `28P01 password authentication failed`). The compose mapping is `5433:5432` and `appsettings.json` uses `Port=5433`. The container-internal port is still 5432.
 - Local-dev credentials: user/password/db all `ticketing`.
-- **Migrations are applied manually** with `dotnet ef database update` (Program.cs does NOT auto-migrate at startup).
+- In Development, API startup auto-applies migrations and seeds `admin@platform.local` / `Admin123$`.
+  For migration authoring, use the cross-project `dotnet ef` commands below.
 
 ## Run
 ```bash
@@ -408,10 +409,27 @@ dotnet ef database update --project src/TicketingPlatform.Infrastructure --start
 # new migration:
 dotnet ef migrations add <Name> --project src/TicketingPlatform.Infrastructure --startup-project src/TicketingPlatform.Api
 dotnet run --project src/TicketingPlatform.Api                     # http://localhost:5000, routes under /api/v1
-dotnet test                                                        # 101 tests (58 unit + 43 integration; integration needs Docker)
+dotnet test                                                        # 117 backend tests (60 unit + 57 integration; integration needs Docker)
 ```
 - API listens on `http://localhost:5000` (launchSettings). `GET /` returns 404 by design (Web API, no home page). OpenAPI spec at `/openapi/v1.json` in Development; there is no Swagger UI. Verify endpoints via `requests.http`.
+- Web UI listens on `http://localhost:3000` from `apps/web`. Use the UI for anonymous/customer/organizer/admin testing; do not expect the API root to render a page.
 - **One instance on port 5000 at a time.** A second `dotnet run` / F5 fails with an address-in-use error; and building while the app runs fails with `MSB3027` because Windows locks the output `.exe`. Stop the app before you build.
+- If the API is running and Windows locks build outputs, run tests with a separate output path, for example `dotnet test tests\TicketingPlatform.UnitTests\TicketingPlatform.UnitTests.csproj --no-restore -p:OutputPath=C:\Users\PC\Desktop\ticketing-platform\.artifacts\unit-test\`.
+
+## Frontend runbook
+```bash
+cd apps/web
+npm.cmd install
+npm.cmd run dev
+# UI: http://localhost:3000
+# API expected at http://localhost:5000 unless API_BASE_URL / NEXT_PUBLIC_API_BASE_URL override it
+# E2E: npm.cmd run e2e
+# Existing dev server: $env:PLAYWRIGHT_SKIP_WEB_SERVER='1'; npm.cmd run e2e
+```
+- Use `http://localhost:3000`, not `http://127.0.0.1:3000`, for Next dev and Playwright. The 127.0.0.1 origin can break Next dev assets/HMR and make pages look like they are cycling.
+- Local HTTP needs `COOKIE_SECURE=false`; real HTTPS production should keep secure cookies enabled.
+- Role entry points: anonymous `/`, `/t/{slug}`, `/t/{slug}/events/{eventId}`; customer `/account`; organizer `/organizer`; platform admin `/admin`.
+- Dev platform admin: `admin@platform.local` / `Admin123$`; create organizer staff from `/admin`.
 
 ## Hard-won gotchas
 - "Build succeeded" is not "works": the state-machine bug compiled cleanly and would have shipped. Lean on tests.
@@ -474,7 +492,28 @@ dotnet test                                                        # 101 tests (
   - `AddAvailabilityReadModel` + `AddTicketsAndPerConsumerDedupe` migrations. **110 tests green (58 unit + 52 integration).**
 - **PROJECT COMPLETE.** Tags: `v1-naive` → `v2-clean` → `v2-eventdriven` → `v3-production`. Remaining is the user's own work: the W14 mock-interview reps against this codebase (drive `requests.http`, defend each layer out loud, break things on purpose). Optional future depth (scoped as design write-ups, not required): reserved-seating map, Elasticsearch search, virtual waiting room / queue-based load leveling.
 - **Note:** the repo also carries `AGENTS.md` (a Codex-facing mirror of this plan, maintained by the user); keep its STATUS in sync with this file if both agents are used.
-- **Then (the road to the production-ready product):** Phase 3 auth **built inside this repo** (Identity user store + JWT + refresh tokens; roles/policies/resource-based authz; tenant claim replaces the `X-Tenant-Id` header) → Phase 4 (payment client with resilience, Redis cache-aside, CQRS read models) → Phase 5 (oversell prevention 3 ways, RabbitMQ + outbox, booking saga, background services, ticket PDFs; tag `v2-eventdriven`) → Phase 5b (SignalR) → Phase 6 (Dockerfile + compose full stack, GitHub Actions CI, Kubernetes, health checks, rate limiting, OpenTelemetry) → Phase 7 (vertical-slice set piece, design write-ups, README polish; tag `v3-production`).
+- **Historical roadmap note:** the backend production path listed here is complete; use Latest status below for current work.
 - **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 
-When you finish a phase, move its items into "Done" and update the "Now" list.
+## Latest status - 2026-07-10
+
+This block supersedes older phase-progress lines above if they disagree.
+
+- Backend milestones are complete through Phase 7 / `v3-production`.
+- Post-v3 product hardening is complete: customer public catalog, customer holds/orders,
+  refunds, ticket validation codes, order idempotency, ownership checks, domain metrics,
+  multi-replica outbox claiming, and shared ticket-file storage config for Docker/Kubernetes.
+- Frontend milestones M0-M4 are complete in `apps/web`: public storefront, customer
+  checkout/account, organizer portal, admin portal, Next.js BFF with HttpOnly cookies, SignalR
+  client, Playwright golden journey, CI web job, and docker-compose `web` service.
+- Current verification: 117 backend tests (60 unit + 57 integration), plus frontend typecheck,
+  lint, production build, npm audit, Playwright e2e, and docker-compose `web` image build.
+- Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
+  `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
+- Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
+  `COOKIE_SECURE=false`; production HTTPS should keep secure cookies enabled.
+- Remaining planned work is not implementation-critical: mock-interview reps and optional future
+  depth such as reserved seating, Elasticsearch search, or a virtual waiting room.
+
+When you finish a phase or product milestone, move its items into "Done" and update this latest
+status block.

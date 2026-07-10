@@ -32,12 +32,21 @@ public sealed class HoldService
     }
 
     public async Task<Result<HoldResponse>> CreateAsync(Guid tenantId, CreateHoldRequest request, CancellationToken ct)
+        => await CreateAsync(tenantId, request, customerUserId: null, ct);
+
+    public async Task<Result<HoldResponse>> CreateAsync(
+        Guid tenantId, CreateHoldRequest request, Guid? customerUserId, CancellationToken ct)
     {
+        TicketingMetrics.HoldAttempts.Add(1);
+
         // Tenant-scoped pre-check: a foreign tenant's ticket type is invisible => NotFound.
         // Also yields the owning EventId for cache invalidation after a successful reserve.
         var inventory = await _holds.GetInventoryForUpdateAsync(request.TicketTypeId, ct);
         if (inventory is null)
+        {
+            TicketingMetrics.HoldConflicts.Add(1, new KeyValuePair<string, object?>("reason", "not_found"));
             return Result<HoldResponse>.NotFound($"Ticket type '{request.TicketTypeId}' was not found.");
+        }
 
         var now = _clock.GetUtcNow();
         var hold = new Hold
@@ -45,6 +54,7 @@ public sealed class HoldService
             Id = Guid.NewGuid(),
             TenantId = tenantId,
             TicketTypeId = request.TicketTypeId,
+            CustomerUserId = customerUserId,
             Quantity = request.Quantity,
             CreatedAt = now,
             ExpiresAt = now.Add(_options.Ttl)
@@ -65,6 +75,7 @@ public sealed class HoldService
         var reserved = await _reservation.ReserveAsync(hold, ct);
         if (!reserved.IsSuccess)
         {
+            TicketingMetrics.HoldConflicts.Add(1, new KeyValuePair<string, object?>("reason", reserved.Error.ToString()));
             return reserved.Error == ResultError.NotFound
                 ? Result<HoldResponse>.NotFound(reserved.Message!)
                 : Result<HoldResponse>.Conflict(reserved.Message!);
@@ -79,6 +90,20 @@ public sealed class HoldService
     public async Task<Result<HoldResponse>> GetByIdAsync(Guid holdId, CancellationToken ct)
     {
         var hold = await _holds.GetAsync(holdId, ct);
+        return hold is null
+            ? Result<HoldResponse>.NotFound($"Hold '{holdId}' was not found.")
+            : Result<HoldResponse>.Success(Map(hold));
+    }
+
+    public async Task<IReadOnlyList<HoldResponse>> ListForCustomerAsync(Guid customerUserId, CancellationToken ct)
+    {
+        var holds = await _holds.ListForCustomerAsync(customerUserId, ct);
+        return holds.Select(Map).ToList();
+    }
+
+    public async Task<Result<HoldResponse>> GetForCustomerAsync(Guid holdId, Guid customerUserId, CancellationToken ct)
+    {
+        var hold = await _holds.GetForCustomerAsync(holdId, customerUserId, ct);
         return hold is null
             ? Result<HoldResponse>.NotFound($"Hold '{holdId}' was not found.")
             : Result<HoldResponse>.Success(Map(hold));

@@ -14,5 +14,6 @@ public sealed record TicketDocumentData(
     string TicketTypeName,
     int Quantity,
     string CustomerEmail,
+    string ValidationCode,
     decimal Amount,
     string Currency);

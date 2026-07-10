@@ -33,6 +33,7 @@ public class TicketingDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
     public DbSet<EventAvailabilityView> EventAvailability => Set<EventAvailabilityView>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
 
@@ -105,6 +106,7 @@ public class TicketingDbContext : DbContext
             b.HasKey(h => h.Id);
             b.Property(h => h.Status).HasConversion<string>().HasMaxLength(20);
             b.HasIndex(h => h.TenantId);
+            b.HasIndex(h => h.CustomerUserId);
 
             // Phase 5's hold-expiry background service scans "Active holds past their TTL";
             // this composite index makes that scan an index seek instead of a table walk.
@@ -151,8 +153,10 @@ public class TicketingDbContext : DbContext
             b.Property(o => o.Currency).IsRequired().HasMaxLength(3);
             b.Property(o => o.Status).HasConversion<string>().HasMaxLength(20);
             b.Property(o => o.ProviderChargeId).HasMaxLength(100);
+            b.Property(o => o.ProviderRefundId).HasMaxLength(100);
             b.HasIndex(o => o.TenantId);
             b.HasIndex(o => o.HoldId); // non-unique: a declined order can be retried on the same hold
+            b.HasIndex(o => o.CustomerUserId);
             b.HasOne(o => o.Hold)
                 .WithMany()
                 .HasForeignKey(o => o.HoldId)
@@ -177,7 +181,9 @@ public class TicketingDbContext : DbContext
             b.HasKey(m => m.Id);
             b.Property(m => m.Type).IsRequired().HasMaxLength(100);
             b.Property(m => m.Payload).IsRequired();
+            b.Property(m => m.LockedBy).HasMaxLength(100);
             b.HasIndex(m => new { m.ProcessedAt, m.OccurredAt }); // the dispatcher's poll path
+            b.HasIndex(m => new { m.ProcessedAt, m.LockedUntil, m.OccurredAt });
         });
 
         modelBuilder.Entity<ProcessedMessage>(b =>
@@ -189,10 +195,25 @@ public class TicketingDbContext : DbContext
         modelBuilder.Entity<Ticket>(b =>
         {
             b.HasKey(t => t.Id);
+            b.Property(t => t.Code).IsRequired().HasMaxLength(64);
             b.Property(t => t.FilePath).IsRequired().HasMaxLength(500);
+            b.Property(t => t.Status).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(t => t.Code).IsUnique();
             b.HasIndex(t => t.OrderId).IsUnique(); // one issued document per order
             b.HasIndex(t => t.TenantId);
             b.HasQueryFilter(t => t.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<IdempotencyRecord>(b =>
+        {
+            b.HasKey(r => r.Id);
+            b.Property(r => r.ActorKey).IsRequired().HasMaxLength(100);
+            b.Property(r => r.Key).IsRequired().HasMaxLength(200);
+            b.Property(r => r.RequestHash).IsRequired().HasMaxLength(64);
+            b.Property(r => r.Status).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(r => new { r.TenantId, r.ActorKey, r.Key }).IsUnique();
+            b.HasIndex(r => r.OrderId);
+            b.HasQueryFilter(r => r.TenantId == CurrentTenantId);
         });
 
         // CQRS read model: tenant-filtered like every tenant-owned read; the projection

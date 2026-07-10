@@ -53,5 +53,39 @@ public sealed class PaymentProviderClient : IPaymentGateway
         }
     }
 
+    public async Task<PaymentResult> RefundAsync(PaymentRefund refund, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "refunds");
+            request.Headers.Add("Idempotency-Key", refund.IdempotencyKey);
+            request.Content = JsonContent.Create(new
+            {
+                chargeId = refund.ProviderChargeId,
+                amount = refund.Amount,
+                currency = refund.Currency
+            });
+
+            using var response = await _http.SendAsync(request, ct);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadFromJsonAsync<RefundResponse>(cancellationToken: ct);
+                return PaymentResult.Success(body?.RefundId ?? "unknown");
+            }
+
+            if (response.StatusCode is >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError)
+                return PaymentResult.Declined();
+
+            return PaymentResult.Unavailable();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or BrokenCircuitException
+                                       or TimeoutRejectedException or TaskCanceledException)
+        {
+            return PaymentResult.Unavailable();
+        }
+    }
+
     private sealed record ChargeResponse(string ChargeId);
+    private sealed record RefundResponse(string RefundId);
 }

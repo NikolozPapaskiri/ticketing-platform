@@ -1,6 +1,8 @@
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Common;
@@ -19,6 +21,8 @@ namespace TicketingPlatform.Api.Controllers;
 [Route("api/v{version:apiVersion}/orders")]
 public class OrdersController : ControllerBase
 {
+    private const string IdempotencyHeader = "Idempotency-Key";
+
     private readonly OrderService _orders;
     private readonly IOrderRepository _orderRepository;
     private readonly IFileStorage _files;
@@ -56,7 +60,14 @@ public class OrdersController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<OrderResponse>> Create(CreateOrderRequest request, CancellationToken ct)
     {
-        var result = await _orders.CreateAsync(_tenant.TenantId!.Value, request, ct);
+        var actorKey = $"staff:{CurrentUserId():N}";
+        var result = await _orders.CreateAsync(
+            _tenant.TenantId!.Value,
+            request,
+            customerUserId: null,
+            Request.Headers[IdempotencyHeader].FirstOrDefault(),
+            actorKey,
+            ct);
         return result.Error switch
         {
             ResultError.None => CreatedAtAction(nameof(GetById), new { id = result.Value!.Id }, result.Value),
@@ -77,5 +88,31 @@ public class OrdersController : ControllerBase
     {
         var result = await _orders.GetByIdAsync(id, ct);
         return result.IsSuccess ? Ok(result.Value) : NotFound();
+    }
+
+    [HttpPost("{id:guid}/refund")]
+    public async Task<ActionResult<OrderResponse>> Refund(Guid id, CancellationToken ct)
+    {
+        var result = await _orders.RefundAsync(_tenant.TenantId!.Value, id, $"staff:{CurrentUserId():N}", ct);
+        return result.Error switch
+        {
+            ResultError.None => Ok(result.Value),
+            ResultError.NotFound => NotFound(),
+            ResultError.Unavailable => Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Payment provider unavailable",
+                detail: result.Message),
+            _ => Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Order cannot be refunded",
+                detail: result.Message)
+        };
+    }
+
+    private Guid CurrentUserId()
+    {
+        var sub = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? throw new InvalidOperationException("Authenticated staff token is missing sub claim.");
+        return Guid.Parse(sub);
     }
 }

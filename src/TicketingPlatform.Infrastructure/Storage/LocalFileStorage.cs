@@ -11,8 +11,12 @@ public sealed class LocalFileStorage : IFileStorage
 {
     private readonly string _root;
 
-    public LocalFileStorage(IConfiguration configuration) =>
+    public LocalFileStorage(IConfiguration configuration)
+    {
         _root = Path.GetFullPath(configuration["FileStorage:Root"] ?? "data");
+        if (!_root.EndsWith(Path.DirectorySeparatorChar))
+            _root += Path.DirectorySeparatorChar;
+    }
 
     public async Task SaveAsync(string path, byte[] content, CancellationToken ct)
     {

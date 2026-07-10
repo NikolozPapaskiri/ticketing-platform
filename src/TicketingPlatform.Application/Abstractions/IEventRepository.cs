@@ -24,4 +24,9 @@ public interface IEventRepository
     void Add(Event ev);
     void AddTicketType(TicketType ticketType);
     Task SaveChangesAsync(CancellationToken ct);
+
+    Task<Tenant?> GetTenantBySlugAsync(string slug, CancellationToken ct);
+    Task<IReadOnlyList<Event>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct);
+    Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct);
+    Task<Event?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct);
 }

@@ -11,3 +11,19 @@ public sealed class CreateOrderRequestValidator : AbstractValidator<CreateOrderR
         RuleFor(x => x.CustomerEmail).NotEmpty().EmailAddress().MaximumLength(256);
     }
 }
+
+public sealed class CreateCustomerOrderRequestValidator : AbstractValidator<CreateCustomerOrderRequest>
+{
+    public CreateCustomerOrderRequestValidator()
+    {
+        RuleFor(x => x.HoldId).NotEmpty();
+    }
+}
+
+public sealed class ValidateTicketRequestValidator : AbstractValidator<ValidateTicketRequest>
+{
+    public ValidateTicketRequestValidator()
+    {
+        RuleFor(x => x.Code).NotEmpty().MaximumLength(64);
+    }
+}

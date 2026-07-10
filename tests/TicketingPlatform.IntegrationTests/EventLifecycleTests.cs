@@ -30,6 +30,35 @@ public class EventLifecycleTests
     }
 
     [Fact]
+    public async Task UpdateEvent_ChangesDetails_AndInvalidatesCachedGraph()
+    {
+        var (_, staff) = await _client.CreateTenantWithStaffAsync();
+        var ev = await _client.CreateEventAsync(staff, "Original");
+
+        // Prime the cache first; the PUT must invalidate this graph.
+        await _client.GetAsAsync(staff, $"/api/v1/events/{ev.Id}");
+
+        var updatedStart = DateTimeOffset.UtcNow.AddMonths(2);
+        var update = await _client.PutAsAsync(staff, $"/api/v1/events/{ev.Id}", new
+        {
+            name = "Updated",
+            description = "Updated description",
+            venueName = "Main Hall",
+            startsAt = updatedStart
+        });
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+
+        var getResponse = await _client.GetAsAsync(staff, $"/api/v1/events/{ev.Id}");
+        var graph = await getResponse.Content.ReadFromJsonAsync<EventDto>(ApiClientExtensions.Json);
+
+        Assert.Equal("Updated", graph!.Name);
+        Assert.Equal("Updated description", graph.Description);
+        Assert.Equal("Main Hall", graph.VenueName);
+        Assert.Equal(updatedStart.ToUnixTimeSeconds(), graph.StartsAt.ToUnixTimeSeconds());
+        Assert.Equal("Draft", graph.Status);
+    }
+
+    [Fact]
     public async Task Transitions_FollowStateMachine_IllegalMovesReturn409()
     {
         var (_, staff) = await _client.CreateTenantWithStaffAsync();

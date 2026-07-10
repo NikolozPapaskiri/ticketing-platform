@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using System.Text;
+using TicketingPlatform.Application.Common;
 using TicketingPlatform.Infrastructure.Persistence;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
@@ -20,6 +21,7 @@ namespace TicketingPlatform.Infrastructure.Messaging;
 public sealed class OutboxDispatcher : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan LockDuration = TimeSpan.FromSeconds(30);
     private const int BatchSize = 20;
 
     private readonly IServiceScopeFactory _scopes;
@@ -28,6 +30,7 @@ public sealed class OutboxDispatcher : BackgroundService
 
     private IConnection? _connection;
     private IChannel? _channel;
+    private readonly string _workerId = $"{Environment.MachineName}:{Guid.NewGuid():N}";
 
     public OutboxDispatcher(IServiceScopeFactory scopes, IOptions<RabbitMqOptions> options, ILogger<OutboxDispatcher> logger)
     {
@@ -66,11 +69,7 @@ public sealed class OutboxDispatcher : BackgroundService
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
 
-        var batch = await db.OutboxMessages
-            .Where(m => m.ProcessedAt == null)
-            .OrderBy(m => m.OccurredAt) // publish in the order things happened
-            .Take(BatchSize)
-            .ToListAsync(ct);
+        var batch = await ClaimBatchAsync(db, ct);
 
         if (batch.Count == 0)
             return;
@@ -102,10 +101,45 @@ public sealed class OutboxDispatcher : BackgroundService
 
             message.ProcessedAt = DateTimeOffset.UtcNow;
             message.Attempts++;
+            message.LockedBy = null;
+            message.LockedUntil = null;
         }
 
         await db.SaveChangesAsync(ct);
+        TicketingMetrics.OutboxPublished.Add(batch.Count);
         _logger.LogInformation("Dispatched {Count} outbox message(s)", batch.Count);
+    }
+
+    private async Task<List<TicketingPlatform.Infrastructure.Outbox.OutboxMessage>> ClaimBatchAsync(
+        TicketingDbContext db, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var batch = await db.OutboxMessages
+            .FromSqlInterpolated($"""
+                SELECT * FROM "OutboxMessages"
+                WHERE "Id" IN (
+                    SELECT "Id" FROM "OutboxMessages"
+                    WHERE "ProcessedAt" IS NULL
+                      AND ("LockedUntil" IS NULL OR "LockedUntil" <= {now})
+                    ORDER BY "OccurredAt"
+                    LIMIT {BatchSize}
+                    FOR UPDATE SKIP LOCKED
+                )
+                ORDER BY "OccurredAt"
+                """)
+            .ToListAsync(ct);
+
+        foreach (var message in batch)
+        {
+            message.LockedBy = _workerId;
+            message.LockedUntil = now.Add(LockDuration);
+        }
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return batch;
     }
 
     private async Task<IChannel> EnsureChannelAsync(CancellationToken ct)

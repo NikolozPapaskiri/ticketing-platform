@@ -52,4 +52,31 @@ public sealed class EventRepository : IEventRepository
     public void AddTicketType(TicketType ticketType) => _db.TicketTypes.Add(ticketType);
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);
+
+    public Task<Tenant?> GetTenantBySlugAsync(string slug, CancellationToken ct) =>
+        _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Slug == slug, ct);
+
+    public async Task<IReadOnlyList<Event>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct) =>
+        await _db.Events
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(e => e.TenantId == tenantId && e.Status == EventStatus.OnSale)
+            .OrderBy(e => e.StartsAt)
+            .ThenBy(e => e.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+    public Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct) =>
+        _db.Events
+            .IgnoreQueryFilters()
+            .CountAsync(e => e.TenantId == tenantId && e.Status == EventStatus.OnSale, ct);
+
+    public Task<Event?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct) =>
+        _db.Events
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Include(e => e.TicketTypes)
+                .ThenInclude(tt => tt.Inventory)
+            .FirstOrDefaultAsync(e => e.Id == eventId && e.TenantId == tenantId && e.Status == EventStatus.OnSale, ct);
 }

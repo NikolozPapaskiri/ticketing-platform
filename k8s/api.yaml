@@ -14,6 +14,8 @@ spec:
     metadata:
       labels: { app: ticketing-api }
     spec:
+      securityContext:
+        fsGroup: 1654
       containers:
         - name: api
           image: ticketing-api:local   # built locally, loaded into the cluster (see README)
@@ -41,6 +43,13 @@ spec:
           resources:
             requests: { cpu: 250m, memory: 256Mi }
             limits: { cpu: "1", memory: 512Mi }
+          volumeMounts:
+            - name: ticket-files
+              mountPath: /var/ticketing/files
+      volumes:
+        - name: ticket-files
+          persistentVolumeClaim:
+            claimName: ticket-files
 ---
 apiVersion: v1
 kind: Service
@@ -52,3 +61,13 @@ spec:
     - port: 80
       targetPort: 8080
   # Try it without an Ingress: kubectl -n ticketing port-forward svc/ticketing-api 5001:80
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ticket-files
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

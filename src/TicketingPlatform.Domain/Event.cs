@@ -31,6 +31,14 @@ public class Event
     public bool CanTransitionTo(EventStatus target) =>
         AllowedTransitions.TryGetValue(Status, out var allowed) && allowed.Contains(target);
 
+    public void UpdateDetails(string name, string? description, string? venueName, DateTimeOffset startsAt)
+    {
+        Name = name;
+        Description = description;
+        VenueName = venueName;
+        StartsAt = startsAt;
+    }
+
     public void TransitionTo(EventStatus target)
     {
         // Defense-in-depth backstop. Callers should pre-check CanTransitionTo and return a clean 409;

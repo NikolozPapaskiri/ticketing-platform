@@ -31,6 +31,7 @@ public sealed class QuestPdfTicketGenerator : ITicketDocumentGenerator
                     column.Item().Text($"{data.TicketTypeName}  x{data.Quantity}");
                     column.Item().Text($"Paid: {data.Amount} {data.Currency}");
                     column.Item().Text($"Holder: {data.CustomerEmail}");
+                    column.Item().Text($"Validation code: {data.ValidationCode}").Bold();
                 });
 
                 // The order id doubles as the entry reference a scanner would validate.

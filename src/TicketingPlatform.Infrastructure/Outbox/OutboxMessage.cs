@@ -21,6 +21,8 @@ public class OutboxMessage
     public DateTimeOffset OccurredAt { get; set; }
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }
+    public DateTimeOffset? LockedUntil { get; set; }
+    public string? LockedBy { get; set; }
 
     /// <summary>
     /// W3C traceparent of the request that produced this event. The dispatcher polls outside

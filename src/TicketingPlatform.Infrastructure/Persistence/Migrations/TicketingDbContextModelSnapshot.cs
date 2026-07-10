@@ -70,6 +70,9 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("CustomerUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -89,6 +92,8 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CustomerUserId");
+
                     b.HasIndex("TenantId");
 
                     b.HasIndex("TicketTypeId");
@@ -96,6 +101,54 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                     b.HasIndex("Status", "ExpiresAt");
 
                     b.ToTable("Holds");
+                });
+
+            modelBuilder.Entity("TicketingPlatform.Domain.IdempotencyRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActorKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("RequestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("TenantId", "ActorKey", "Key")
+                        .IsUnique();
+
+                    b.ToTable("IdempotencyRecords");
                 });
 
             modelBuilder.Entity("TicketingPlatform.Domain.Inventory", b =>
@@ -184,12 +237,22 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<Guid?>("CustomerUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("HoldId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("ProviderChargeId")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<string>("ProviderRefundId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset?>("RefundedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -200,6 +263,8 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CustomerUserId");
 
                     b.HasIndex("HoldId");
 
@@ -277,6 +342,11 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -288,10 +358,24 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("ScannedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("VoidedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
 
                     b.HasIndex("OrderId")
                         .IsUnique();
@@ -384,6 +468,13 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                     b.Property<int>("Attempts")
                         .HasColumnType("integer");
 
+                    b.Property<string>("LockedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset?>("LockedUntil")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset>("OccurredAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -405,6 +496,8 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ProcessedAt", "OccurredAt");
+
+                    b.HasIndex("ProcessedAt", "LockedUntil", "OccurredAt");
 
                     b.ToTable("OutboxMessages");
                 });

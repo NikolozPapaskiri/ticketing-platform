@@ -88,11 +88,26 @@ internal static class ApiClientExtensions
             request.Content = JsonContent.Create(body);
         return client.SendAsync(request);
     }
+
+    public static Task<HttpResponseMessage> PutAsAsync(this HttpClient client, string token, string url, object body)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = JsonContent.Create(body);
+        return client.SendAsync(request);
+    }
 }
 
 // Local response shapes: tests deserialize only what they assert on.
 internal sealed record TenantDto(Guid Id, string Name, string Slug);
-internal sealed record EventDto(Guid Id, string Name, string Status, IReadOnlyList<TicketTypeDto> TicketTypes);
+internal sealed record EventDto(
+    Guid Id,
+    string Name,
+    string? Description,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    string Status,
+    IReadOnlyList<TicketTypeDto> TicketTypes);
 internal sealed record TicketTypeDto(Guid Id, string Name, decimal Price, string Currency, int TotalQuantity, int AvailableQuantity);
 internal sealed record PageDto<T>(IReadOnlyList<T> Items, int PageNumber, int PageSize, int TotalItems, int TotalPages);
 internal sealed record EventListItemDto(Guid Id, string Name, string Status);

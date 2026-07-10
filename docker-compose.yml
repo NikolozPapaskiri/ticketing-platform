@@ -13,10 +13,9 @@ services:
       RabbitMq__HostName: rabbitmq
       Jwt__SigningKey: DEV-ONLY-signing-key-ticketing-platform-local-0123456789
       PaymentProvider__BaseUrl: http://localhost:8080/dev-payment/
-      # Ticket PDFs: /tmp is world-writable, so the non-root app user can write without an
-      # ownership dance on the root-owned WORKDIR. A real deployment mounts a volume here or
-      # swaps LocalFileStorage for the S3/MinIO adapter behind IFileStorage.
-      FileStorage__Root: /tmp/tickets
+      FileStorage__Root: /var/ticketing/files
+    volumes:
+      - ticketfiles:/var/ticketing/files
     depends_on:
       postgres:
         condition: service_healthy
@@ -24,6 +23,20 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+    container_name: ticketing-web
+    ports:
+      - "3000:3000"
+    environment:
+      API_BASE_URL: http://api:8080
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:5000
+      COOKIE_SECURE: "false"
+    depends_on:
+      api:
+        condition: service_started
 
   postgres:
     image: postgres:17
@@ -72,3 +85,4 @@ services:
 
 volumes:
   pgdata:
+  ticketfiles:

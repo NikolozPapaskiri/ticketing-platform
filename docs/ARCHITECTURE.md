@@ -17,6 +17,31 @@ Infrastructure  EF Core, repositories, payment client, Redis, RabbitMQ, backgrou
 Dependencies point inward. Nothing references Api; Domain references nothing. The Api project
 contains **zero EF Core usage** (grep-verified) except the one deliberate vertical slice.
 
+The web product is a separate Next.js app in `apps/web`, not another domain layer:
+
+```text
+Browser
+  -> Next.js UI
+      -> Next.js route handlers (BFF, HttpOnly token cookies)
+          -> ASP.NET Core API
+  -> SignalR availability hub directly
+```
+
+The BFF owns browser session transport: access and refresh tokens stay in HttpOnly cookies,
+REST calls are server-to-server, and the browser only connects directly to `/hubs/availability`
+because that hub is anonymous and CORS-scoped. `/account`, `/organizer`, and `/admin` have UI
+role guards for navigation, but the API authorization policies remain the real security wall.
+
+Frontend operational rules:
+
+- Public routes: `/`, `/t/{slug}`, `/t/{slug}/events/{eventId}`.
+- Customer route: `/account`.
+- Organizer route: `/organizer`.
+- Platform admin route: `/admin`.
+- Local browser testing uses `http://localhost:3000`, not `http://127.0.0.1:3000`, because Next
+  dev assets/HMR expect the same localhost origin used by Playwright and the app config.
+- Local HTTP uses `COOKIE_SECURE=false`; production HTTPS should keep secure cookies enabled.
+
 ## Clean Architecture vs Vertical Slice — and where each lives here
 
 **Clean Architecture** is the default for this codebase because the domain is long-lived and
@@ -111,7 +136,9 @@ Restraint is the senior signal. Splitting to fix messy code produces distributed
 Many fast unit tests on domain/application logic (the state machine, reservation math,
 validators — no DB, no HTTP). Integration tests against **real** Postgres, Redis, and RabbitMQ
 via Testcontainers, driving the actual API through `WebApplicationFactory` and authenticating
-like a real client. `DbContext` is never mocked. 110 tests total, run in CI on every push.
+like a real client. `DbContext` is never mocked. The backend has 117 tests total. The frontend
+adds typecheck, lint, production build, npm audit, and a Playwright golden journey that seeds
+through the API and then drives the real browser flow.
 
 ## What was deliberately deferred (and why that is a feature)
 

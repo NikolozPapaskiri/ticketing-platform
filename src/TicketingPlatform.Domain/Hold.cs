@@ -15,6 +15,9 @@ public class Hold
     public Guid TicketTypeId { get; set; }
     public TicketType TicketType { get; set; } = null!;
 
+    /// <summary>Set for self-service customer holds; null for organizer staff box-office holds.</summary>
+    public Guid? CustomerUserId { get; set; }
+
     public int Quantity { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }

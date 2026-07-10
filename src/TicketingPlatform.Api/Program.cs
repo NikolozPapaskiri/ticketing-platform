@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Asp.Versioning;
+using Microsoft.AspNetCore.DataProtection;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -17,6 +18,7 @@ using TicketingPlatform.Api.Features.SalesReport;
 using TicketingPlatform.Api.Realtime;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Services;
 using TicketingPlatform.Application.Validation;
 using TicketingPlatform.Domain;
@@ -27,6 +29,7 @@ using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
+const string WebHubCorsPolicy = "web-hub";
 
 builder.Services.AddControllers(options =>
 {
@@ -50,6 +53,19 @@ builder.Services.AddApiVersioning(options =>
 // RFC 7807 ProblemDetails + a global exception handler.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+
+var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+{
+    var keysPath = Path.IsPathRooted(dataProtectionKeysPath)
+        ? dataProtectionKeysPath
+        : Path.Combine(builder.Environment.ContentRootPath, dataProtectionKeysPath);
+
+    Directory.CreateDirectory(keysPath);
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
+        .SetApplicationName("ticketing-platform");
+}
 
 // --- Authentication: JWT bearer. The API validates issuer, audience, lifetime, and signature
 // on EVERY request; a JWT is signed, not encrypted, so validation is the whole security story.
@@ -106,6 +122,7 @@ builder.Services.AddScoped<EventService>();
 builder.Services.AddScoped<HoldService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<OrderService>();
+builder.Services.AddScoped<TicketService>();
 
 // Hold TTL / expiry-scan settings (plain singleton so Application stays free of IOptions).
 builder.Services.AddSingleton(
@@ -118,6 +135,18 @@ builder.Services.AddSingleton(
 builder.Services.AddSignalR()
     .AddStackExchangeRedis(builder.Configuration.GetConnectionString("Redis")!);
 builder.Services.AddSingleton<IAvailabilityBroadcaster, SignalRAvailabilityBroadcaster>();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(WebHubCorsPolicy, policy =>
+    {
+        var webOrigin = builder.Configuration["Cors:WebOrigin"] ?? "http://localhost:3000";
+        policy.WithOrigins(webOrigin)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
 
 // --- Health checks. Liveness ("is the process alive") deliberately checks NOTHING external:
 // a pod that is alive but missing a dependency must fail READINESS (stop routing traffic to
@@ -165,7 +194,8 @@ builder.Services.AddOpenTelemetry()
     {
         metrics.AddAspNetCoreInstrumentation()
                .AddHttpClientInstrumentation()
-               .AddRuntimeInstrumentation();
+               .AddRuntimeInstrumentation()
+               .AddMeter(TicketingMetrics.MeterName);
         if (otlpEndpoint is not null)
             metrics.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
     });
@@ -191,6 +221,7 @@ if (app.Environment.IsDevelopment())
     // The resilient PaymentProviderClient points here via PaymentProvider:BaseUrl; tests
     // exercise the failure paths against WireMock instead.
     app.MapPost("/dev-payment/charges", () => Results.Ok(new { chargeId = $"ch_{Guid.NewGuid():N}" }));
+    app.MapPost("/dev-payment/refunds", () => Results.Ok(new { refundId = $"rf_{Guid.NewGuid():N}" }));
 
     // Development convenience: migrate + seed the first PlatformAdmin so the closed
     // provisioning chain (only admins create staff) can start. Production migrates
@@ -205,6 +236,7 @@ if (app.Environment.IsDevelopment())
 // Rate limiting sits before authentication: a brute-forcer gets 429'd without ever reaching
 // the password hasher.
 app.UseRateLimiter();
+app.UseCors();
 
 // Pipeline order matters: authenticate (who are you) -> resolve tenant FROM the principal's
 // claim -> authorize (are you allowed) -> endpoint.
@@ -216,7 +248,8 @@ app.UseAuthorization();
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
 
-app.MapHub<AvailabilityHub>("/hubs/availability"); // live availability push (anonymous by design)
+app.MapHub<AvailabilityHub>("/hubs/availability")
+    .RequireCors(WebHubCorsPolicy); // live availability push (anonymous by design)
 
 // The vertical-slice set piece (see the file's header for the architecture argument).
 app.MapEventSalesReport();
