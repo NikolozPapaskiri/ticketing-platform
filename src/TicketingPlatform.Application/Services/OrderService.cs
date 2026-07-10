@@ -31,17 +31,15 @@ public sealed class OrderService
 {
     private readonly IOrderRepository _orders;
     private readonly IPaymentGateway _payments;
-    private readonly IReservationStrategy _reservation;
     private readonly IOutbox _outbox;
     private readonly TimeProvider _clock;
     private readonly HoldOptions _holdOptions;
 
     public OrderService(IOrderRepository orders, IPaymentGateway payments,
-        IReservationStrategy reservation, IOutbox outbox, TimeProvider clock, HoldOptions holdOptions)
+        IOutbox outbox, TimeProvider clock, HoldOptions holdOptions)
     {
         _orders = orders;
         _payments = payments;
-        _reservation = reservation;
         _outbox = outbox;
         _clock = clock;
         _holdOptions = holdOptions;
@@ -305,28 +303,71 @@ public sealed class OrderService
         if (order is null)
             return Result<OrderResponse>.NotFound($"Order '{orderId}' was not found.");
 
+        // Idempotent: an already-refunded order just replays; an in-flight one (claimed by a
+        // concurrent caller or a prior attempt) resumes the SAME provider movement.
+        if (order.Status == OrderStatus.Refunded)
+            return Result<OrderResponse>.Success(Map(order));
+        if (order.Status == OrderStatus.RefundPending)
+            return await SettleRefundAsync(order, tenantId, actorKey, now, ct);
         if (order.Status != OrderStatus.Confirmed)
             return Result<OrderResponse>.Conflict($"Order is '{order.Status}' and cannot be refunded.");
-
         if (order.ProviderChargeId is null)
             return Result<OrderResponse>.Conflict("Order has no provider charge to refund.");
 
+        // Policy: a scanned (admitted) ticket is non-refundable - the good was consumed.
+        var ticket = await _orders.GetTicketForUpdateAsync(order.Id, ct);
+        if (ticket is not null && ticket.Status == TicketStatus.Scanned)
+            return Result<OrderResponse>.Conflict("Ticket has already been scanned; a used ticket cannot be refunded.");
+
+        // Atomically claim Confirmed -> RefundPending BEFORE the provider call. The order's
+        // concurrency token means only one caller wins the claim; the loser resolves to this
+        // same order and re-attempts the provider with the SAME stable key (idempotent).
+        order.MarkRefundPending();
+        if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
+        {
+            var current = await _orders.GetForRefundAsync(orderId, ct);
+            if (current is null)
+                return Result<OrderResponse>.NotFound($"Order '{orderId}' was not found.");
+            return current.Status switch
+            {
+                OrderStatus.Refunded => Result<OrderResponse>.Success(Map(current)),
+                OrderStatus.RefundPending => await SettleRefundAsync(current, tenantId, actorKey, now, ct),
+                _ => Result<OrderResponse>.Conflict($"Order is '{current.Status}' and cannot be refunded.")
+            };
+        }
+
+        return await SettleRefundAsync(order, tenantId, actorKey, now, ct);
+    }
+
+    /// <summary>
+    /// Call the provider with the STABLE per-order refund key and settle the RefundPending order.
+    /// Shared by the claimant and any concurrent caller that resumes the in-flight refund, so the
+    /// money moves once and inventory is credited once regardless of who or how many retry.
+    /// </summary>
+    private async Task<Result<OrderResponse>> SettleRefundAsync(
+        Order order, Guid tenantId, string actorKey, DateTimeOffset now, CancellationToken ct)
+    {
         var refund = await _payments.RefundAsync(
-            new PaymentRefund($"refund:{order.Id:N}:{actorKey}", order.ProviderChargeId, order.Amount, order.Currency), ct);
+            new PaymentRefund($"refund:{order.Id:N}", order.ProviderChargeId!, order.Amount, order.Currency), ct);
 
         if (refund.Failure == PaymentFailure.ProviderUnavailable)
         {
+            // Ambiguous: keep RefundPending. The stable key makes a later retry safe (one refund).
             TicketingMetrics.OrdersPaymentUnavailable.Add(1, new KeyValuePair<string, object?>("operation", "refund"));
             return Result<OrderResponse>.Unavailable("The payment provider is unavailable; please try again shortly.");
         }
 
         if (!refund.Succeeded)
+        {
+            order.RevertRefundClaim(); // release the claim so the order is not stuck
+            await _orders.TrySaveChangesAsync(ct);
             return Result<OrderResponse>.Conflict("Refund was declined.");
+        }
 
         order.MarkRefunded(refund.ProviderChargeId!, now);
-
         var ticket = await _orders.GetTicketForUpdateAsync(order.Id, ct);
         ticket?.Void(now);
+        order.Hold.TicketType.Inventory.Release(order.Hold.Quantity); // credit the seat back, once
 
         _outbox.Add("AvailabilityChanged", new
         {
@@ -338,12 +379,21 @@ public sealed class OrderService
         {
             OrderId = order.Id,
             TenantId = tenantId,
+            RefundedByActor = actorKey, // the initiating actor, for audit
             order.CustomerEmail,
             order.Amount,
             order.Currency
         });
 
-        await _reservation.ReleaseAsync(order.Hold, ct);
+        if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
+        {
+            // A concurrent caller settled first; return that outcome without double-crediting.
+            var settled = await _orders.GetForRefundAsync(order.Id, ct);
+            return settled is null
+                ? Result<OrderResponse>.NotFound($"Order '{order.Id}' was not found.")
+                : Result<OrderResponse>.Success(Map(settled));
+        }
+
         TicketingMetrics.OrdersRefunded.Add(1);
         return Result<OrderResponse>.Success(Map(order));
     }

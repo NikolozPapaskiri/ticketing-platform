@@ -95,7 +95,16 @@ public sealed class RedisAtomicReservationStrategy : IReservationStrategy
     public async Task ReleaseAsync(Hold hold, CancellationToken ct)
     {
         hold.TicketType.Inventory.Release(hold.Quantity);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another writer already released/expired this hold; our DB credit rolled back
+            // atomically. Return before touching Redis so the counter is credited exactly once.
+            return;
+        }
 
         // Credit the counter only if it exists (expired counter re-seeds from the DB anyway).
         var redis = _redis.GetDatabase();

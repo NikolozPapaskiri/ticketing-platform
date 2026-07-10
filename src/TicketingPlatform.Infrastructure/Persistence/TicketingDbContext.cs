@@ -179,7 +179,7 @@ public class TicketingDbContext : DbContext
             // backstop for "one successful order per hold", independent of the claim logic.
             b.HasIndex(o => o.HoldId)
                 .IsUnique()
-                .HasFilter("\"Status\" IN ('PendingPayment', 'Confirmed', 'Refunded')");
+                .HasFilter("\"Status\" IN ('PendingPayment', 'Confirmed', 'RefundPending', 'Refunded')");
 
             // Optimistic concurrency: the confirm/refund transitions run through change tracking
             // guarded by this token, so a double-finalize (retry + reconciler) cannot both win.
@@ -233,6 +233,15 @@ public class TicketingDbContext : DbContext
             b.HasIndex(t => t.Code).IsUnique();
             b.HasIndex(t => t.OrderId).IsUnique(); // one issued document per order
             b.HasIndex(t => t.TenantId);
+
+            // Optimistic concurrency: the Issued -> Scanned flip is a compare-and-swap, so two
+            // scanners racing on one code produce exactly one admission.
+            b.Property<uint>("xmin")
+                .HasColumnName("xmin")
+                .HasColumnType("xid")
+                .ValueGeneratedOnAddOrUpdate()
+                .IsConcurrencyToken();
+
             b.HasQueryFilter(t => t.TenantId == CurrentTenantId);
         });
 

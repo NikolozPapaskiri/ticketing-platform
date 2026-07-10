@@ -50,13 +50,33 @@ public class Order
         Status = OrderStatus.PaymentFailed;
     }
 
-    public void MarkRefunded(string providerRefundId, DateTimeOffset refundedAt)
+    /// <summary>
+    /// Claim the refund before calling the provider: Confirmed -> RefundPending. Guarded by the
+    /// row's concurrency token so only one caller (customer or staff) owns the money movement;
+    /// the loser resolves to this same order instead of issuing a second provider refund.
+    /// </summary>
+    public void MarkRefundPending()
     {
         if (Status != OrderStatus.Confirmed)
+            throw new InvalidOperationException($"Cannot start a refund for an order in status '{Status}'.");
+        Status = OrderStatus.RefundPending;
+    }
+
+    public void MarkRefunded(string providerRefundId, DateTimeOffset refundedAt)
+    {
+        if (Status is not (OrderStatus.Confirmed or OrderStatus.RefundPending))
             throw new InvalidOperationException($"Cannot refund an order in status '{Status}'.");
         Status = OrderStatus.Refunded;
         ProviderRefundId = providerRefundId;
         RefundedAt = refundedAt;
+    }
+
+    /// <summary>An ambiguous refund settled as "no refund happened": RefundPending -> Confirmed.</summary>
+    public void RevertRefundClaim()
+    {
+        if (Status != OrderStatus.RefundPending)
+            throw new InvalidOperationException($"Cannot revert a refund claim from status '{Status}'.");
+        Status = OrderStatus.Confirmed;
     }
 }
 
@@ -64,6 +84,7 @@ public enum OrderStatus
 {
     PendingPayment,
     Confirmed,
+    RefundPending, // a refund is in flight (claimed before the provider call)
     PaymentFailed,
     Refunded
 }
