@@ -106,6 +106,32 @@ public class EventsController : ControllerBase
         return result.IsSuccess ? Ok(result.Value) : NotFound();
     }
 
+    /// <summary>
+    /// Uploads the event's marketplace image (JPEG/PNG/WebP, max 2 MB). Stored through the
+    /// IFileStorage port; served anonymously at /public/events/{id}/image for catalog cards.
+    /// </summary>
+    [HttpPost("{id:guid}/image")]
+    public async Task<IActionResult> UploadImage(Guid id, IFormFile file, CancellationToken ct)
+    {
+        if (!_tenant.HasTenant)
+            return MissingTenant();
+
+        if (file.Length is 0 or > Application.Services.EventService.MaxImageBytes)
+            return Problem(statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid image", detail: "Image must be between 1 byte and 2 MB.");
+
+        using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, ct);
+
+        var result = await _events.SetImageAsync(_tenant.TenantId!.Value, id, buffer.ToArray(), file.ContentType, ct);
+        return result.Error switch
+        {
+            Application.Common.ResultError.None => NoContent(),
+            Application.Common.ResultError.NotFound => NotFound(),
+            _ => Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid image", detail: result.Message)
+        };
+    }
+
     [HttpPost("{eventId:guid}/ticket-types")]
     public async Task<ActionResult<TicketTypeResponse>> AddTicketType(
         Guid eventId,

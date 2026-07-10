@@ -13,6 +13,12 @@ public class Event
     public string? Description { get; set; }
     public string? VenueName { get; set; }
 
+    /// <summary>Marketplace browse category (tkt.ge-style icon navigation).</summary>
+    public EventCategory Category { get; set; } = EventCategory.Other;
+
+    /// <summary>Storage-relative path of the event image; null = no image (UI shows a placeholder).</summary>
+    public string? ImagePath { get; private set; }
+
     public DateTimeOffset StartsAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
@@ -31,13 +37,16 @@ public class Event
     public bool CanTransitionTo(EventStatus target) =>
         AllowedTransitions.TryGetValue(Status, out var allowed) && allowed.Contains(target);
 
-    public void UpdateDetails(string name, string? description, string? venueName, DateTimeOffset startsAt)
+    public void UpdateDetails(string name, string? description, string? venueName, DateTimeOffset startsAt, EventCategory category)
     {
         Name = name;
         Description = description;
         VenueName = venueName;
         StartsAt = startsAt;
+        Category = category;
     }
+
+    public void SetImage(string imagePath) => ImagePath = imagePath;
 
     public void TransitionTo(EventStatus target)
     {
@@ -56,4 +65,19 @@ public enum EventStatus
     Draft,
     OnSale,
     Closed
+}
+
+/// <summary>Marketplace categories, mirroring the icon navigation of consumer ticketing sites.</summary>
+public enum EventCategory
+{
+    Other,
+    Concert,
+    Theatre,
+    Opera,
+    Sport,
+    Cinema,
+    Festival,
+    StandUp,
+    Conference,
+    Kids
 }

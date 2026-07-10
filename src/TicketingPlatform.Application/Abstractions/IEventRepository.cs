@@ -29,4 +29,33 @@ public interface IEventRepository
     Task<IReadOnlyList<Event>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct);
     Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct);
     Task<Event?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct);
+
+    // --- Marketplace: the CROSS-TENANT public catalog. Implementations must IgnoreQueryFilters
+    // (an anonymous request has no tenant, so the filter would return nothing) and expose only
+    // OnSale events. TenantId narrows to one organizer when the storefront filters by slug.
+    Task<int> CountMarketplaceAsync(EventCategory? category, DateTimeOffset? from, DateTimeOffset? to,
+        string? query, Guid? tenantId, CancellationToken ct);
+    Task<IReadOnlyList<MarketplaceEventRow>> ListMarketplaceAsync(EventCategory? category, DateTimeOffset? from,
+        DateTimeOffset? to, string? query, Guid? tenantId, int page, int pageSize, CancellationToken ct);
+
+    /// <summary>Cross-tenant OnSale event graph + its tenant, or null (hidden/unknown => 404 upstream).</summary>
+    Task<MarketplaceEventDetail?> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct);
+
+    /// <summary>Image path regardless of status (organizers preview drafts); null when no image.</summary>
+    Task<string?> GetImagePathAsync(Guid eventId, CancellationToken ct);
 }
+
+/// <summary>SQL-projected catalog row: PriceFrom is MIN(ticket price) computed in the database.</summary>
+public sealed record MarketplaceEventRow(
+    Guid Id,
+    string Name,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    EventCategory Category,
+    string? ImagePath,
+    string TenantName,
+    string TenantSlug,
+    decimal? PriceFrom,
+    string? Currency);
+
+public sealed record MarketplaceEventDetail(Event Event, string TenantName, string TenantSlug);

@@ -58,7 +58,11 @@ public class TicketingDbContext : DbContext
             b.Property(e => e.Name).IsRequired().HasMaxLength(200);
             b.Property(e => e.VenueName).HasMaxLength(200);
             b.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(e => e.Category).HasConversion<string>().HasMaxLength(20);
+            b.Property(e => e.ImagePath).HasMaxLength(500);
             b.HasIndex(e => e.TenantId);
+            // The marketplace catalog's scan path: OnSale + category + date ordering.
+            b.HasIndex(e => new { e.Status, e.Category, e.StartsAt });
             b.HasMany(e => e.TicketTypes)
                 .WithOne(tt => tt.Event)
                 .HasForeignKey(tt => tt.EventId)

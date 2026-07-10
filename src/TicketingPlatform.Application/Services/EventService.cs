@@ -20,14 +20,29 @@ public sealed class EventService
     /// </summary>
     private static readonly TimeSpan EventGraphTtl = TimeSpan.FromSeconds(30);
 
+    /// <summary>Accepted upload types; the extension doubles as the stored file's suffix.</summary>
+    private static readonly Dictionary<string, string> ImageContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["image/jpeg"] = ".jpg",
+        ["image/png"] = ".png",
+        ["image/webp"] = ".webp"
+    };
+    public const int MaxImageBytes = 2 * 1024 * 1024;
+
     private readonly IEventRepository _events;
     private readonly ICacheService _cache;
+    private readonly IFileStorage _files;
 
-    public EventService(IEventRepository events, ICacheService cache)
+    public EventService(IEventRepository events, ICacheService cache, IFileStorage files)
     {
         _events = events;
         _cache = cache;
+        _files = files;
     }
+
+    /// <summary>Requests carry the category as a validated string; null means Other.</summary>
+    private static EventCategory ParseCategory(string? category) =>
+        Enum.TryParse<EventCategory>(category, ignoreCase: true, out var parsed) ? parsed : EventCategory.Other;
 
     private static string EventGraphKey(Guid tenantId, Guid eventId) => CacheKeys.EventGraph(tenantId, eventId);
 
@@ -117,6 +132,7 @@ public sealed class EventService
             Description = request.Description,
             VenueName = request.VenueName,
             StartsAt = request.StartsAt,
+            Category = ParseCategory(request.Category),
             CreatedAt = DateTimeOffset.UtcNow
             // Status defaults to Draft — the entity owns that invariant.
         };
@@ -125,7 +141,8 @@ public sealed class EventService
         await _events.SaveChangesAsync(ct);
 
         return new EventResponse(
-            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(), []);
+            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(),
+            ev.Category.ToString(), ev.ImagePath is not null, []);
     }
 
     public async Task<Result<EventResponse>> UpdateAsync(Guid tenantId, Guid id, UpdateEventRequest request, CancellationToken ct)
@@ -134,12 +151,14 @@ public sealed class EventService
         if (ev is null)
             return Result<EventResponse>.NotFound($"Event '{id}' was not found.");
 
-        ev.UpdateDetails(request.Name, request.Description, request.VenueName, request.StartsAt);
+        ev.UpdateDetails(request.Name, request.Description, request.VenueName, request.StartsAt,
+            ParseCategory(request.Category));
         await _events.SaveChangesAsync(ct);
 
         await _cache.RemoveAsync(EventGraphKey(tenantId, id), ct);
         return Result<EventResponse>.Success(new EventResponse(
-            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(), []));
+            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(),
+            ev.Category.ToString(), ev.ImagePath is not null, []));
     }
 
     public async Task<Result<TicketTypeResponse>> AddTicketTypeAsync(
@@ -201,6 +220,88 @@ public sealed class EventService
         return Result.Success();
     }
 
+    // --- Marketplace: the global cross-tenant catalog behind /public/events.
+    public async Task<Result<PagedResponse<MarketplaceEventResponse>>> ListMarketplaceAsync(
+        MarketplaceFilter filter, int page, int pageSize, CancellationToken ct)
+    {
+        Guid? tenantId = null;
+        if (!string.IsNullOrWhiteSpace(filter.TenantSlug))
+        {
+            var tenant = await _events.GetTenantBySlugAsync(filter.TenantSlug, ct);
+            if (tenant is null)
+                return Result<PagedResponse<MarketplaceEventResponse>>.NotFound($"Tenant '{filter.TenantSlug}' was not found.");
+            tenantId = tenant.Id;
+        }
+
+        EventCategory? category = string.IsNullOrWhiteSpace(filter.Category) ? null : ParseCategory(filter.Category);
+
+        var totalCount = await _events.CountMarketplaceAsync(category, filter.From, filter.To, filter.Query, tenantId, ct);
+        var rows = await _events.ListMarketplaceAsync(category, filter.From, filter.To, filter.Query, tenantId, page, pageSize, ct);
+
+        var items = rows.Select(r => new MarketplaceEventResponse(
+            r.Id, r.Name, r.VenueName, r.StartsAt, r.Category.ToString(),
+            r.TenantName, r.TenantSlug, r.PriceFrom, r.Currency, r.ImagePath is not null)).ToList();
+
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+        return Result<PagedResponse<MarketplaceEventResponse>>.Success(
+            new PagedResponse<MarketplaceEventResponse>(items, page, pageSize, totalCount, totalPages));
+    }
+
+    public async Task<Result<MarketplaceEventDetailResponse>> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct)
+    {
+        var detail = await _events.GetMarketplaceEventAsync(eventId, ct);
+        if (detail is null)
+            return Result<MarketplaceEventDetailResponse>.NotFound($"Event '{eventId}' was not found.");
+
+        var ev = detail.Event;
+        return Result<MarketplaceEventDetailResponse>.Success(new MarketplaceEventDetailResponse(
+            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Category.ToString(),
+            detail.TenantName, detail.TenantSlug, ev.ImagePath is not null,
+            ev.TicketTypes.Select(tt => new TicketTypeResponse(
+                tt.Id, tt.Name, tt.Price, tt.Currency,
+                tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()));
+    }
+
+    // --- Event image: stored via the IFileStorage port, streamed anonymously for the catalog.
+    public async Task<Result> SetImageAsync(Guid tenantId, Guid eventId, byte[] content, string contentType, CancellationToken ct)
+    {
+        if (!ImageContentTypes.TryGetValue(contentType, out var extension))
+            return Result.Conflict("Unsupported image type. Use JPEG, PNG, or WebP.");
+        if (content.Length is 0 or > MaxImageBytes)
+            return Result.Conflict($"Image must be between 1 byte and {MaxImageBytes / (1024 * 1024)} MB.");
+
+        var ev = await _events.GetForUpdateAsync(eventId, ct); // tenant-scoped: foreign event => null
+        if (ev is null)
+            return Result.NotFound($"Event '{eventId}' was not found.");
+
+        var path = $"event-images/{tenantId}/{eventId}{extension}";
+        await _files.SaveAsync(path, content, ct);
+        ev.SetImage(path);
+        await _events.SaveChangesAsync(ct);
+
+        await _cache.RemoveAsync(EventGraphKey(tenantId, eventId), ct);
+        return Result.Success();
+    }
+
+    public async Task<(Stream Stream, string ContentType)?> GetImageAsync(Guid eventId, CancellationToken ct)
+    {
+        var path = await _events.GetImagePathAsync(eventId, ct);
+        if (path is null)
+            return null;
+
+        var stream = await _files.OpenReadAsync(path, ct);
+        if (stream is null)
+            return null;
+
+        var contentType = Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            _ => "image/jpeg"
+        };
+        return (stream, contentType);
+    }
+
     private static EventResponse Map(Event ev) => new(
         ev.Id,
         ev.Name,
@@ -208,6 +309,8 @@ public sealed class EventService
         ev.VenueName,
         ev.StartsAt,
         ev.Status.ToString(),
+        ev.Category.ToString(),
+        ev.ImagePath is not null,
         ev.TicketTypes
             .Select(tt => new TicketTypeResponse(
                 tt.Id,

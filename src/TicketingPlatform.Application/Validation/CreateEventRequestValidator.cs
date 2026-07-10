@@ -15,5 +15,10 @@ public sealed class CreateEventRequestValidator : AbstractValidator<CreateEventR
         RuleFor(x => x.StartsAt)
             .Must(starts => starts > clock.GetUtcNow())
             .WithMessage("Event start must be in the future.");
+
+        // Null means "Other"; anything provided must be a known category name.
+        RuleFor(x => x.Category)
+            .Must(c => c is null || Enum.TryParse<Domain.EventCategory>(c, ignoreCase: true, out _))
+            .WithMessage($"Category must be one of: {string.Join(", ", Enum.GetNames<Domain.EventCategory>())}.");
     }
 }

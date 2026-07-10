@@ -79,4 +79,84 @@ public sealed class EventRepository : IEventRepository
             .Include(e => e.TicketTypes)
                 .ThenInclude(tt => tt.Inventory)
             .FirstOrDefaultAsync(e => e.Id == eventId && e.TenantId == tenantId && e.Status == EventStatus.OnSale, ct);
+
+    // --- Marketplace: the cross-tenant catalog. Composable IQueryable, filters applied only
+    // when present (same deferred-execution pattern as the staff browse).
+    private IQueryable<Event> MarketplaceQuery(EventCategory? category, DateTimeOffset? from,
+        DateTimeOffset? to, string? query, Guid? tenantId)
+    {
+        var events = _db.Events
+            .IgnoreQueryFilters() // anonymous scope has no tenant; visibility = OnSale only
+            .AsNoTracking()
+            .Where(e => e.Status == EventStatus.OnSale);
+
+        if (category is not null)
+            events = events.Where(e => e.Category == category);
+        if (from is not null)
+            events = events.Where(e => e.StartsAt >= from);
+        if (to is not null)
+            events = events.Where(e => e.StartsAt <= to);
+        if (!string.IsNullOrWhiteSpace(query))
+            // ILike = Postgres case-insensitive LIKE; provider-specific SQL belongs HERE,
+            // behind the port, which is the whole argument for the repository layer.
+            events = events.Where(e =>
+                EF.Functions.ILike(e.Name, $"%{query}%") ||
+                (e.VenueName != null && EF.Functions.ILike(e.VenueName, $"%{query}%")));
+        if (tenantId is not null)
+            events = events.Where(e => e.TenantId == tenantId);
+
+        return events;
+    }
+
+    public Task<int> CountMarketplaceAsync(EventCategory? category, DateTimeOffset? from, DateTimeOffset? to,
+        string? query, Guid? tenantId, CancellationToken ct) =>
+        MarketplaceQuery(category, from, to, query, tenantId).CountAsync(ct);
+
+    public async Task<IReadOnlyList<MarketplaceEventRow>> ListMarketplaceAsync(EventCategory? category,
+        DateTimeOffset? from, DateTimeOffset? to, string? query, Guid? tenantId, int page, int pageSize,
+        CancellationToken ct) =>
+        await MarketplaceQuery(category, from, to, query, tenantId)
+            .OrderBy(e => e.StartsAt)
+            .ThenBy(e => e.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            // Tenants carry no query filter (top-level owners), so this join works anonymously.
+            // PriceFrom/Currency come from MIN-price subqueries computed in SQL, not in memory.
+            .Join(_db.Tenants,
+                e => e.TenantId,
+                t => t.Id,
+                (e, t) => new MarketplaceEventRow(
+                    e.Id,
+                    e.Name,
+                    e.VenueName,
+                    e.StartsAt,
+                    e.Category,
+                    e.ImagePath,
+                    t.Name,
+                    t.Slug,
+                    e.TicketTypes.Min(tt => (decimal?)tt.Price),
+                    e.TicketTypes.OrderBy(tt => tt.Price).Select(tt => tt.Currency).FirstOrDefault()))
+            .ToListAsync(ct);
+
+    public async Task<MarketplaceEventDetail?> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct)
+    {
+        var ev = await _db.Events
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Include(e => e.TicketTypes)
+                .ThenInclude(tt => tt.Inventory)
+            .FirstOrDefaultAsync(e => e.Id == eventId && e.Status == EventStatus.OnSale, ct);
+        if (ev is null)
+            return null;
+
+        var tenant = await _db.Tenants.AsNoTracking().FirstAsync(t => t.Id == ev.TenantId, ct);
+        return new MarketplaceEventDetail(ev, tenant.Name, tenant.Slug);
+    }
+
+    public async Task<string?> GetImagePathAsync(Guid eventId, CancellationToken ct) =>
+        await _db.Events
+            .IgnoreQueryFilters()
+            .Where(e => e.Id == eventId)
+            .Select(e => e.ImagePath)
+            .FirstOrDefaultAsync(ct);
 }

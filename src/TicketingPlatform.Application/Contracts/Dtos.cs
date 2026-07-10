@@ -4,9 +4,10 @@ namespace TicketingPlatform.Application.Contracts;
 public record CreateTenantRequest(string Name, string Slug);
 public record TenantResponse(Guid Id, string Name, string Slug);
 
-// Event
-public record CreateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt);
-public record UpdateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt);
+// Event. Category is a string validated against EventCategory names (null => Other) so the
+// JSON contract stays plain strings without a global enum-converter dependency.
+public record CreateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null);
+public record UpdateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null);
 public record EventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt, string Status);
 public record EventResponse(
     Guid Id,
@@ -15,6 +16,8 @@ public record EventResponse(
     string? VenueName,
     DateTimeOffset StartsAt,
     string Status,
+    string Category,
+    bool HasImage,
     IReadOnlyList<TicketTypeResponse> TicketTypes);
 
 // Ticket type
@@ -63,6 +66,38 @@ public record TicketAvailabilityResponse(
     int Available,
     int Total,
     DateTimeOffset UpdatedAt);
+
+// Marketplace (global cross-tenant catalog, tkt.ge-style)
+public record MarketplaceFilter(
+    string? Category,
+    DateTimeOffset? From,
+    DateTimeOffset? To,
+    string? Query,
+    string? TenantSlug);
+
+public record MarketplaceEventResponse(
+    Guid Id,
+    string Name,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    string Category,
+    string TenantName,
+    string TenantSlug,
+    decimal? PriceFrom,
+    string? Currency,
+    bool HasImage);
+
+public record MarketplaceEventDetailResponse(
+    Guid Id,
+    string Name,
+    string? Description,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    string Category,
+    string TenantName,
+    string TenantSlug,
+    bool HasImage,
+    IReadOnlyList<TicketTypeResponse> TicketTypes);
 
 // Public catalog
 public record PublicEventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt);
