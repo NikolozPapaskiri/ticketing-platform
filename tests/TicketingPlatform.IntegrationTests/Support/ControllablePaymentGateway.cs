@@ -1,0 +1,50 @@
+using System.Collections.Concurrent;
+using TicketingPlatform.Application.Abstractions;
+
+namespace TicketingPlatform.IntegrationTests.Support;
+
+/// <summary>
+/// Test-only <see cref="IPaymentGateway"/> that replaces the real HTTP client. It gives the race
+/// tests three things WireMock cannot: (1) an exact charge barrier so a payment can be frozen
+/// mid-flight while the rest of the system moves, (2) a count of DISTINCT provider idempotency
+/// keys - the true money-invariant metric (a faithful provider dedupes retries of one key but
+/// still charges two DIFFERENT keys), and (3) a scriptable response per scenario.
+/// </summary>
+public sealed class ControllablePaymentGateway : IPaymentGateway
+{
+    private readonly ConcurrentDictionary<string, byte> _chargeKeys = new();
+    private readonly ConcurrentDictionary<string, byte> _refundKeys = new();
+
+    /// <summary>Freeze a charge mid-flight to force an exact interleaving. Disarmed by default.</summary>
+    public AsyncGate ChargeGate { get; } = new();
+
+    public Func<PaymentCharge, PaymentResult> ChargeResponder { get; set; } = DefaultCharge;
+
+    private static PaymentResult DefaultCharge(PaymentCharge c) => PaymentResult.Success($"ch_{Guid.NewGuid():N}");
+
+    /// <summary>Distinct provider idempotency keys charged. This is what "charged twice" means.</summary>
+    public int DistinctChargeCount => _chargeKeys.Count;
+
+    /// <summary>Distinct provider idempotency keys refunded (used by PR 2's refund tests).</summary>
+    public int DistinctRefundCount => _refundKeys.Count;
+
+    public void Reset()
+    {
+        _chargeKeys.Clear();
+        _refundKeys.Clear();
+        ChargeResponder = DefaultCharge;
+    }
+
+    public async Task<PaymentResult> ChargeAsync(PaymentCharge charge, CancellationToken ct)
+    {
+        await ChargeGate.PassAsync(ct);          // deterministic interleaving seam
+        _chargeKeys.TryAdd(charge.IdempotencyKey, 0);
+        return ChargeResponder(charge);
+    }
+
+    public Task<PaymentResult> RefundAsync(PaymentRefund refund, CancellationToken ct)
+    {
+        _refundKeys.TryAdd(refund.IdempotencyKey, 0);
+        return Task.FromResult(PaymentResult.Success($"rf_{Guid.NewGuid():N}"));
+    }
+}
