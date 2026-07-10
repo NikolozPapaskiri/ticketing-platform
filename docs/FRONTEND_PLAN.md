@@ -110,6 +110,31 @@ npm.cmd run dev
 - Verified at completion: backend 117 tests; frontend typecheck, lint, production build, npm
   audit, Playwright e2e, and docker-compose `web` image build.
 
+## M5 - Marketplace upgrade (tkt.ge-inspired), implemented
+
+Surveyed tkt.ge live: icon+label category navigation, date-first browsing, image-led cards,
+one catalog across organizers. Translated to this product:
+
+- [x] Backend: `Event.Category` (10 categories) + `Event.ImagePath`;
+  `GET /api/v1/public/events` — anonymous CROSS-TENANT catalog of OnSale events with
+  category/from/to/q(ILike)/tenantSlug filters and SQL-computed price-from;
+  `GET /public/events/{id}` tenant-agnostic detail; staff image upload
+  (`POST /events/{id}/image`, JPEG/PNG/WebP ≤2MB via IFileStorage) + anonymous
+  `GET /public/events/{id}/image`. `AddEventCategoryAndImage` migration.
+  123 backend tests green (6 new marketplace tests).
+- [x] Homepage = marketplace: search-first hero (zero-JS GET form), icon category nav,
+  "Happening soon" cross-tenant grid, organizers as a secondary section.
+- [x] `/events` catalog: category chips with active state, date chips
+  (today/tomorrow/weekend), search, pagination preserving filters.
+- [x] `/events/{id}`: image hero (per-category gradient fallback), category badge, organizer
+  link, same live-availability checkout panel. `/t/{slug}` storefronts unchanged.
+- [x] Organizer portal: category select on the event form + marketplace image upload
+  (new BFF multipart route `api/bff/events/[id]/image`).
+- Known dev-only noise: React strict-mode double-mount aborts the first SignalR negotiation
+  in `next dev` (retry connects); absent in production builds.
+- Follow-ups if wanted: Playwright journey entering via the marketplace homepage; a seed
+  script for demo data (this round seeded via API calls).
+
 ## Deliberately out of scope
 
 Reserved seating, a real payment-provider UI, i18n, and native mobile remain out of scope for

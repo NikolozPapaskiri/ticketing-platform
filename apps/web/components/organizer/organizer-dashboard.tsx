@@ -17,11 +17,13 @@ import {
   refundStaffOrder,
   releaseStaffHold,
   updateOrganizerEvent,
+  uploadEventImage,
   validateTicket,
   type EventInput,
   type TicketTypeInput,
   ApiClientError
 } from "@/lib/client-api";
+import { CATEGORIES } from "@/lib/marketplace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +37,8 @@ function emptyEvent(): EventInput {
     name: "",
     description: "",
     venueName: "",
-    startsAt: startsAt.toISOString().slice(0, 16)
+    startsAt: startsAt.toISOString().slice(0, 16),
+    category: "Other"
   };
 }
 
@@ -61,6 +64,7 @@ export function OrganizerDashboard() {
   const [eventForm, setEventForm] = useState<EventInput>(emptyEvent);
   const [ticketForm, setTicketForm] = useState<TicketTypeInput>(emptyTicketType);
   const [ticketCode, setTicketCode] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [boxTicketTypeId, setBoxTicketTypeId] = useState("");
   const [boxQuantity, setBoxQuantity] = useState(1);
   const [boxCustomerEmail, setBoxCustomerEmail] = useState("");
@@ -103,7 +107,8 @@ export function OrganizerDashboard() {
         name: created.name,
         description: created.description ?? "",
         venueName: created.venueName ?? "",
-        startsAt: new Date(created.startsAt).toISOString().slice(0, 16)
+        startsAt: new Date(created.startsAt).toISOString().slice(0, 16),
+        category: created.category ?? "Other"
       });
       setBoxTicketTypeId(created.ticketTypes[0]?.id ?? "");
       void queryClient.invalidateQueries({ queryKey: ["organizer-events"] });
@@ -117,9 +122,18 @@ export function OrganizerDashboard() {
         name: updated.name,
         description: updated.description ?? "",
         venueName: updated.venueName ?? "",
-        startsAt: new Date(updated.startsAt).toISOString().slice(0, 16)
+        startsAt: new Date(updated.startsAt).toISOString().slice(0, 16),
+        category: updated.category ?? "Other"
       });
       void queryClient.invalidateQueries({ queryKey: ["organizer-events"] });
+      void queryClient.invalidateQueries({ queryKey: ["organizer-event", selectedEventId] });
+    }
+  });
+
+  const uploadImage = useMutation({
+    mutationFn: () => uploadEventImage(selectedEventId, imageFile!),
+    onSuccess: () => {
+      setImageFile(null);
       void queryClient.invalidateQueries({ queryKey: ["organizer-event", selectedEventId] });
     }
   });
@@ -170,7 +184,8 @@ export function OrganizerDashboard() {
         name: item.name,
         description: "",
         venueName: item.venueName ?? "",
-        startsAt: new Date(item.startsAt).toISOString().slice(0, 16)
+        startsAt: new Date(item.startsAt).toISOString().slice(0, 16),
+        category: "Other" // list items carry no category; the detail fetch below corrects it
       });
     }
 
@@ -183,7 +198,8 @@ export function OrganizerDashboard() {
       name: eventDetail.name,
       description: eventDetail.description ?? "",
       venueName: eventDetail.venueName ?? "",
-      startsAt: new Date(eventDetail.startsAt).toISOString().slice(0, 16)
+      startsAt: new Date(eventDetail.startsAt).toISOString().slice(0, 16),
+      category: eventDetail.category ?? "Other"
     });
     setBoxTicketTypeId((current) =>
       current && eventDetail.ticketTypes.some((ticketType) => ticketType.id === current)
@@ -258,6 +274,19 @@ export function OrganizerDashboard() {
                 value={eventForm.venueName}
                 onChange={(event) => setEventForm((current) => ({ ...current, venueName: event.target.value }))}
               />
+              <Label htmlFor="event-category">Category</Label>
+              <select
+                id="event-category"
+                value={eventForm.category ?? "Other"}
+                onChange={(event) => setEventForm((current) => ({ ...current, category: event.target.value }))}
+                className="h-10 rounded-[8px] border border-input bg-background px-3 text-sm outline-none ring-primary/30 focus:ring-2"
+              >
+                {CATEGORIES.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
               <Label htmlFor="event-starts-at">Starts at</Label>
               <Input
                 id="event-starts-at"
@@ -271,6 +300,33 @@ export function OrganizerDashboard() {
                 value={eventForm.description}
                 onChange={(event) => setEventForm((current) => ({ ...current, description: event.target.value }))}
               />
+              {canEdit ? (
+                <>
+                  <Label htmlFor="event-image">Marketplace image (JPEG/PNG/WebP, max 2 MB)</Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      id="event-image"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={!imageFile || uploadImage.isPending}
+                      onClick={() => uploadImage.mutate()}
+                    >
+                      {uploadImage.isPending ? "Uploading..." : "Upload image"}
+                    </Button>
+                  </div>
+                  {uploadImage.isError ? (
+                    <p className="text-sm text-destructive">{errorText(uploadImage.error)}</p>
+                  ) : null}
+                  {selectedEvent.data?.hasImage ? (
+                    <p className="text-sm text-muted-foreground">This event has a marketplace image.</p>
+                  ) : null}
+                </>
+              ) : null}
               <div className="flex flex-wrap gap-2">
                 <Button type="submit" disabled={createEvent.isPending || updateEvent.isPending}>
                   {canEdit ? "Save event" : "Create event"}

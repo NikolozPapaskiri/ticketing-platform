@@ -63,6 +63,8 @@ export type MarketplaceEventDetail = PublicEvent & {
 
 export type EventDetail = PublicEvent & {
   status: string;
+  category: string;
+  hasImage: boolean;
 };
 
 export type User = {

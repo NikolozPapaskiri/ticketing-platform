@@ -100,6 +100,7 @@ export type EventInput = {
   description?: string;
   venueName?: string;
   startsAt: string;
+  category?: string;
 };
 
 export type TicketTypeInput = {
@@ -124,6 +125,20 @@ export function createOrganizerEvent(input: EventInput) {
 
 export function updateOrganizerEvent(eventId: string, input: EventInput) {
   return bff<EventDetail>(`/events/${eventId}`, { method: "PUT", body: JSON.stringify(input) });
+}
+
+/** Multipart, so it bypasses the JSON bff helper; the BFF route forwards the form + auth. */
+export async function uploadEventImage(eventId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`/api/bff/events/${encodeURIComponent(eventId)}/image`, {
+    method: "POST",
+    body: form
+  });
+  if (!response.ok) {
+    const problem = (await response.json().catch(() => ({}))) as ApiProblem;
+    throw new ApiClientError(response.status, problem);
+  }
 }
 
 export function publishEvent(eventId: string) {
