@@ -504,8 +504,14 @@ This block supersedes older phase-progress lines above if they disagree.
   client, Playwright e2e, CI web job, docker-compose `web` service, the tkt.ge-style
   marketplace (M5), and the virtual waiting room (M6: Redis FIFO line, rate-limited admission
   valve, SignalR queue pushes, 429-enforced customer holds via X-Visitor-Id; staff bypasses).
-- Current verification: 129 backend tests (60 unit + 69 integration, incl. 6 waiting-room),
-  plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
+- Durable payment state machine (hardening plan PR 1) is DONE: claim-before-charge with a
+  PaymentPending hold state + payment lease, order persisted before the charge (stable provider
+  key), partial unique index (one live order per hold), Hold/Order xmin tokens, GetChargeStatus
+  reconciliation on retry + a PaymentReconciliationService for orphaned leases, ambiguous outcome
+  -> 202. AddDurablePaymentState migration. Next up: PR 2 (atomic refund/scan/release).
+- Current verification: 134 backend tests (60 unit + 74 integration, incl. 6 waiting-room and
+  5 payment-race/reconciliation), plus frontend typecheck, lint, production build, Playwright
+  e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need

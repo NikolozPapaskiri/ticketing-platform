@@ -515,8 +515,20 @@ This block supersedes older phase-progress lines above if they disagree.
   `POST /customer/holds` (`X-Visitor-Id` header, 429 when not admitted; staff/box-office bypass
   by design), SignalR `queueAdmitted`/`queuePosition` pushes on per-visitor groups with a poll
   fallback, and the `WaitingRoomGate` web component (visitor id in localStorage).
-- Current verification: 129 backend tests (60 unit + 69 integration, incl. 6 waiting-room),
-  plus frontend typecheck, lint, production build, Playwright e2e (4), and live API smoke.
+- **Durable payment state machine (hardening plan PR 1) is done.** Checkout now: replay/recover
+  by idempotency key → atomically claim `Active → PaymentPending` (hold `xmin` token) + open a
+  `PendingPayment` order + record the key in ONE transaction committed BEFORE the charge (order
+  id = stable provider key) → charge with no DB txn open → finalize (Confirmed / PaymentFailed +
+  hold back to Active-or-Expired / ambiguous stays PendingPayment → **202**). A PaymentPending
+  hold is never expiry-reclaimed; a partial unique index enforces one live order per hold; Order
+  `xmin` blocks double-finalize; `IPaymentGateway.GetChargeStatusAsync` + `PaymentReconciliation
+  Service` settle orphaned leases (multi-replica-safe via the tokens). `AddDurablePaymentState`
+  migration. Deterministic race harness in tests (`AsyncGate`, `ControllablePaymentGateway`,
+  `FaultInterceptor`). **Still open from the plan: PR 2 (atomic refund/scan/release), PR 3
+  (RabbitMQ publisher confirms + topology), PR 4 (waiting-room Lua/token-bucket), PR 5 (prod ops).**
+- Current verification: 134 backend tests (60 unit + 74 integration, incl. 6 waiting-room and
+  5 payment-race/reconciliation), plus frontend typecheck, lint, production build, Playwright
+  e2e (4), and live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
@@ -528,9 +540,9 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Immediate planned work: execute `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`, starting with the
-  durable payment state machine and deterministic race tests. Mock-interview reps follow the
-  safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- Immediate planned work: continue `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md` at **PR 2**
+  (atomic refund/scan/release with stable refund key + reconciliation). Mock-interview reps
+  follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

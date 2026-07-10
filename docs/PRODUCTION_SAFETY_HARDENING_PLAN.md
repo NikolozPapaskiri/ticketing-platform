@@ -106,6 +106,14 @@ but the failing tests and implementation remain separate commits.
 
 ## PR 1: Durable payment state machine and race tests
 
+**Status: DONE** (branch `feature/payment-state-safety`). Delivered as: `test:` red race suite →
+`feat:` durable claim + reconciliation → `test:` reconciler completes a crashed checkout unaided →
+`docs:` this update. 134 tests green (60 unit + 74 integration). Notes vs the original sketch: the
+ambiguous-outcome response is **202 Accepted** (order kept PendingPayment) rather than a bare
+error; crash recovery works BOTH on the client's retry (synchronous, via `GetChargeStatus`) and
+via the background `PaymentReconciliationService`; multi-replica safety uses the Hold/Order `xmin`
+tokens as the compare-and-swap rather than `FOR UPDATE SKIP LOCKED`.
+
 Suggested branch: `feature/payment-state-safety`
 
 Suggested commits:
