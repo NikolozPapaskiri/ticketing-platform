@@ -61,6 +61,9 @@ public sealed class CustomerOrdersController : ControllerBase
 
         return result.Error switch
         {
+            // PendingPayment => the provider outcome is unknown; 202 + a stable order id to poll.
+            ResultError.None when result.Value!.Status == nameof(OrderStatus.PendingPayment) =>
+                AcceptedAtAction(nameof(GetById), new { id = result.Value.Id }, result.Value),
             ResultError.None => CreatedAtAction(nameof(GetById), new { id = result.Value!.Id }, result.Value),
             ResultError.NotFound => NotFound(),
             ResultError.Unavailable => Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Payment provider unavailable", detail: result.Message),

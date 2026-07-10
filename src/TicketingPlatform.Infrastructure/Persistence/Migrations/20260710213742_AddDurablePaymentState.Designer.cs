@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TicketingPlatform.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using TicketingPlatform.Infrastructure.Persistence;
 namespace TicketingPlatform.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(TicketingDbContext))]
-    partial class TicketingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260710213742_AddDurablePaymentState")]
+    partial class AddDurablePaymentState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -282,9 +285,6 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
-                    b.Property<DateTimeOffset?>("RefundClaimedAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<DateTimeOffset?>("RefundedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -308,7 +308,7 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("HoldId")
                         .IsUnique()
-                        .HasFilter("\"Status\" IN ('PendingPayment', 'Confirmed', 'RefundPending', 'Refunded')");
+                        .HasFilter("\"Status\" IN ('PendingPayment', 'Confirmed', 'Refunded')");
 
                     b.HasIndex("TenantId");
 
@@ -413,12 +413,6 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("VoidedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<uint>("xmin")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 

@@ -101,10 +101,9 @@ public sealed class CustomerCheckoutTests
         var doubleScan = await _client.PostAsAsync(staff, "/api/v1/tickets/validate", new { code });
         Assert.Equal(HttpStatusCode.Conflict, doubleScan.StatusCode);
 
-        var refund = await _client.PostAsAsync(customer.Token, $"/api/v1/customer/orders/{firstOrder.Id}/refund");
-        Assert.Equal(HttpStatusCode.OK, refund.StatusCode);
-        var refunded = (await refund.Content.ReadFromJsonAsync<OrderDto>(ApiClientExtensions.Json))!;
-        Assert.Equal("Refunded", refunded.Status);
+        // Policy (docs/ARCHITECTURE.md): a scanned ticket is a consumed good - non-refundable.
+        var refundAfterScan = await _client.PostAsAsync(customer.Token, $"/api/v1/customer/orders/{firstOrder.Id}/refund");
+        Assert.Equal(HttpStatusCode.Conflict, refundAfterScan.StatusCode);
     }
 
     private async Task<HttpResponseMessage> PollTicketAsync(string token, Guid orderId)

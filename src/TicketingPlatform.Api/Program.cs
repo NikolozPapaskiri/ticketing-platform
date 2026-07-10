@@ -226,8 +226,22 @@ if (app.Environment.IsDevelopment())
 
     // DEV-ONLY mock payment provider so the saga runs locally with zero external deps.
     // The resilient PaymentProviderClient points here via PaymentProvider:BaseUrl; tests
-    // exercise the failure paths against WireMock instead.
-    app.MapPost("/dev-payment/charges", () => Results.Ok(new { chargeId = $"ch_{Guid.NewGuid():N}" }));
+    // exercise the failure paths against WireMock instead. It remembers charged keys so the
+    // reconciliation lookup (GET charges/{key}) can answer truthfully - and so charging the
+    // same key twice returns the same id, exactly like a real idempotent provider.
+    var devCharges = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+    app.MapPost("/dev-payment/charges", (HttpRequest req) =>
+    {
+        var key = req.Headers["Idempotency-Key"].FirstOrDefault();
+        var chargeId = key is null
+            ? $"ch_{Guid.NewGuid():N}"
+            : devCharges.GetOrAdd(key, _ => $"ch_{Guid.NewGuid():N}");
+        return Results.Ok(new { chargeId });
+    });
+    app.MapGet("/dev-payment/charges/{key}", (string key) =>
+        devCharges.TryGetValue(key, out var chargeId)
+            ? Results.Ok(new { status = "charged", chargeId })
+            : Results.NotFound());
     app.MapPost("/dev-payment/refunds", () => Results.Ok(new { refundId = $"rf_{Guid.NewGuid():N}" }));
 
     // Development convenience: migrate + seed the first PlatformAdmin so the closed

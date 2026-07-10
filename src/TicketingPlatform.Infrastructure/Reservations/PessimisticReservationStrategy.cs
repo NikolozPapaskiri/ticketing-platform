@@ -60,8 +60,18 @@ public sealed class PessimisticReservationStrategy : IReservationStrategy
             WHERE "TicketTypeId" = {hold.TicketTypeId} AND "TenantId" = {hold.TenantId}
             """, ct);
 
-        await _db.SaveChangesAsync(ct); // persists the hold's Released/Expired status flip
-        await tx.CommitAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct); // persists the hold's Released/Expired status flip
+            await tx.CommitAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another writer already released/expired this hold. The status flip's concurrency
+            // token no longer matches, so the whole transaction rolls back and the inventory
+            // increment above never lands - the seat is credited exactly once (idempotent).
+            await tx.RollbackAsync(ct);
+        }
     }
 
     private async Task<int?> SelectForUpdateAsync(Guid ticketTypeId, Guid tenantId, IDbContextTransaction tx, CancellationToken ct)

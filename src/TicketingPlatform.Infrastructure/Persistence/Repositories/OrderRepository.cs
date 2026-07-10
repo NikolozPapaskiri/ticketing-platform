@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Domain;
 
@@ -47,6 +48,43 @@ public sealed class OrderRepository : IOrderRepository
                     .ThenInclude(tt => tt.Inventory)
             .FirstOrDefaultAsync(o => o.Id == orderId, ct);
 
+    public Task<Order?> GetOrderWithHoldForUpdateAsync(Guid orderId, CancellationToken ct) =>
+        // Tracked graph, cross-tenant: the finalize/reconcile path runs before a tenant is set
+        // and mutates order + hold (concurrency-token guarded) and possibly inventory.
+        _db.Orders
+            .IgnoreQueryFilters()
+            .Include(o => o.Hold)
+                .ThenInclude(h => h.TicketType)
+                    .ThenInclude(tt => tt.Inventory)
+            .FirstOrDefaultAsync(o => o.Id == orderId, ct);
+
+    public async Task<IReadOnlyList<Guid>> GetOrderIdsWithExpiredPaymentLeaseAsync(
+        DateTimeOffset now, int batchSize, CancellationToken ct) =>
+        await _db.Orders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(o => o.Status == OrderStatus.PendingPayment
+                        && o.Hold.Status == HoldStatus.PaymentPending
+                        && o.Hold.PaymentLeaseUntil != null
+                        && o.Hold.PaymentLeaseUntil <= now)
+            .OrderBy(o => o.Hold.PaymentLeaseUntil)
+            .Take(batchSize)
+            .Select(o => o.Id)
+            .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Guid>> GetOrderIdsWithStaleRefundClaimAsync(
+        DateTimeOffset staleBefore, int batchSize, CancellationToken ct) =>
+        await _db.Orders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(o => o.Status == OrderStatus.RefundPending
+                        && o.RefundClaimedAt != null
+                        && o.RefundClaimedAt <= staleBefore)
+            .OrderBy(o => o.RefundClaimedAt)
+            .Take(batchSize)
+            .Select(o => o.Id)
+            .ToListAsync(ct);
+
     public Task<Ticket?> GetTicketAsync(Guid orderId, CancellationToken ct) =>
         _db.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
 
@@ -62,7 +100,9 @@ public sealed class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(ct);
 
     public Task<Ticket?> GetTicketForUpdateAsync(Guid orderId, CancellationToken ct) =>
-        _db.Tickets.FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
+        // Cross-tenant: the order id is globally unique, and the reconciler (no tenant) must be
+        // able to void the ticket when it settles a stranded refund.
+        _db.Tickets.IgnoreQueryFilters().FirstOrDefaultAsync(t => t.OrderId == orderId, ct);
 
     public Task<Ticket?> GetTicketByCodeForUpdateAsync(string code, CancellationToken ct) =>
         _db.Tickets.FirstOrDefaultAsync(t => t.Code == code, ct);
@@ -72,6 +112,11 @@ public sealed class OrderRepository : IOrderRepository
         _db.IdempotencyRecords
             .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.ActorKey == actorKey && r.Key == key, ct);
 
+    public Task<IdempotencyRecord?> GetIdempotencyForOrderForUpdateAsync(Guid orderId, CancellationToken ct) =>
+        _db.IdempotencyRecords
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(r => r.OrderId == orderId, ct);
+
     public void Add(Order order) => _db.Orders.Add(order);
 
     public void Add(IdempotencyRecord record) => _db.IdempotencyRecords.Add(record);
@@ -79,4 +124,23 @@ public sealed class OrderRepository : IOrderRepository
     public void Remove(IdempotencyRecord record) => _db.IdempotencyRecords.Remove(record);
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);
+
+    public async Task<SaveOutcome> TrySaveChangesAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            return SaveOutcome.Success;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            _db.ChangeTracker.Clear(); // abandon the failed changes so the caller can re-read cleanly
+            return SaveOutcome.ConcurrencyConflict;
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            _db.ChangeTracker.Clear();
+            return SaveOutcome.UniqueViolation;
+        }
+    }
 }

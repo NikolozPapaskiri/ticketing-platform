@@ -80,6 +80,14 @@ public sealed class OptimisticReservationStrategy : IReservationStrategy
             }
             catch (DbUpdateConcurrencyException ex) when (attempt < MaxAttempts)
             {
+                // If the HOLD row conflicted, another release or expiry already flipped it AND
+                // credited inventory. This attempt must NOT credit a second time - the atomic
+                // SaveChanges rolled our increment back, so just stop (idempotent). Retrying is
+                // only correct for an inventory-only conflict (a concurrent reserve), where we
+                // re-apply our single credit against reloaded state. This is the fix for the
+                // double-credit the old unconditional retry produced under a release race.
+                if (ex.Entries.Any(e => e.Entity is Hold))
+                    return;
                 foreach (var entry in ex.Entries)
                     await entry.ReloadAsync(ct);
             }

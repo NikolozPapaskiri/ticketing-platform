@@ -116,6 +116,18 @@ public class TicketingDbContext : DbContext
             // this composite index makes that scan an index seek instead of a table walk.
             b.HasIndex(h => new { h.Status, h.ExpiresAt });
 
+            // The reconciler scans PaymentPending holds whose lease has expired.
+            b.HasIndex(h => new { h.Status, h.PaymentLeaseUntil });
+
+            // Optimistic concurrency via Postgres xmin makes the Active -> PaymentPending claim
+            // (and the PaymentPending -> Confirmed finalize) atomic: two racing writers cannot
+            // both win. Same shadow-property pattern as Inventory.
+            b.Property<uint>("xmin")
+                .HasColumnName("xmin")
+                .HasColumnType("xid")
+                .ValueGeneratedOnAddOrUpdate()
+                .IsConcurrencyToken();
+
             b.HasOne(h => h.TicketType)
                 .WithMany()
                 .HasForeignKey(h => h.TicketTypeId)
@@ -159,8 +171,24 @@ public class TicketingDbContext : DbContext
             b.Property(o => o.ProviderChargeId).HasMaxLength(100);
             b.Property(o => o.ProviderRefundId).HasMaxLength(100);
             b.HasIndex(o => o.TenantId);
-            b.HasIndex(o => o.HoldId); // non-unique: a declined order can be retried on the same hold
             b.HasIndex(o => o.CustomerUserId);
+
+            // At most ONE live purchase lineage per hold: a PendingPayment/Confirmed/Refunded
+            // order excludes any other. Declined (PaymentFailed) attempts are excluded from the
+            // filter so a buyer can retry the same hold after a decline. This is the database's
+            // backstop for "one successful order per hold", independent of the claim logic.
+            b.HasIndex(o => o.HoldId)
+                .IsUnique()
+                .HasFilter("\"Status\" IN ('PendingPayment', 'Confirmed', 'RefundPending', 'Refunded')");
+
+            // Optimistic concurrency: the confirm/refund transitions run through change tracking
+            // guarded by this token, so a double-finalize (retry + reconciler) cannot both win.
+            b.Property<uint>("xmin")
+                .HasColumnName("xmin")
+                .HasColumnType("xid")
+                .ValueGeneratedOnAddOrUpdate()
+                .IsConcurrencyToken();
+
             b.HasOne(o => o.Hold)
                 .WithMany()
                 .HasForeignKey(o => o.HoldId)
@@ -205,6 +233,15 @@ public class TicketingDbContext : DbContext
             b.HasIndex(t => t.Code).IsUnique();
             b.HasIndex(t => t.OrderId).IsUnique(); // one issued document per order
             b.HasIndex(t => t.TenantId);
+
+            // Optimistic concurrency: the Issued -> Scanned flip is a compare-and-swap, so two
+            // scanners racing on one code produce exactly one admission.
+            b.Property<uint>("xmin")
+                .HasColumnName("xmin")
+                .HasColumnType("xid")
+                .ValueGeneratedOnAddOrUpdate()
+                .IsConcurrencyToken();
+
             b.HasQueryFilter(t => t.TenantId == CurrentTenantId);
         });
 

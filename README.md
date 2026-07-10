@@ -27,10 +27,14 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
 - Frontend milestones M0-M6 are complete in `apps/web` (M5 = the tkt.ge-style marketplace,
   M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
   position pushes, 429-enforced checkout on gated events).
-- Current verified backend suite: 129 tests (60 unit + 69 integration).
+- Current verified backend suite: 140 tests (60 unit + 80 integration).
 - The three oversell-prevention strategies are load-tested head-to-head under flash-sale
   concurrency — zero oversell across all three; numbers and analysis in
   [docs/LOAD_TEST.md](docs/LOAD_TEST.md).
+- Post-reservation safety is being hardened per [docs/PRODUCTION_SAFETY_HARDENING_PLAN.md](docs/PRODUCTION_SAFETY_HARDENING_PLAN.md):
+  **PR 1** (durable payment state machine) and **PR 2** (atomic refund / ticket scan / hold
+  release, with a scanned-ticket-is-non-refundable policy) are done — a payment in flight can't
+  oversell, double-charge, be lost to a crash, or be double-refunded, and a ticket admits once.
 - Current verified frontend checks: typecheck, lint, production build, npm audit, and the
   Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the
@@ -250,6 +254,11 @@ Events/holds/orders require an **OrganizerStaff JWT** (the tenant comes from its
 wrong role → 403, cross-tenant → 404. All errors are RFC 7807.
 
 ## Roadmap (staged; tags mark milestones)
+
+The next active milestone is failure-window hardening across payment, idempotency, atomic state
+transitions, RabbitMQ delivery, and the virtual waiting room. The test-first PR sequence and
+completion gates are documented in
+**[docs/PRODUCTION_SAFETY_HARDENING_PLAN.md](docs/PRODUCTION_SAFETY_HARDENING_PLAN.md)**.
 
 - **Done (Phase 2, tag `v2-clean`):** Clean Architecture (use-case services + repository ports,
   thin controllers, Api free of EF), Testcontainers integration tests, the `Hold` TTL

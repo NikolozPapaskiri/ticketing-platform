@@ -495,7 +495,7 @@ npm.cmd run dev
 - **Historical roadmap note:** the backend production path listed here is complete; use Latest status below for current work.
 - **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 
-## Latest status - 2026-07-10
+## Latest status - 2026-07-11
 
 This block supersedes older phase-progress lines above if they disagree.
 
@@ -515,7 +515,27 @@ This block supersedes older phase-progress lines above if they disagree.
   `POST /customer/holds` (`X-Visitor-Id` header, 429 when not admitted; staff/box-office bypass
   by design), SignalR `queueAdmitted`/`queuePosition` pushes on per-visitor groups with a poll
   fallback, and the `WaitingRoomGate` web component (visitor id in localStorage).
-- Current verification: 129 backend tests (60 unit + 69 integration, incl. 6 waiting-room),
+- **Durable payment state machine (hardening plan PR 1) is done.** Checkout now: replay/recover
+  by idempotency key → atomically claim `Active → PaymentPending` (hold `xmin` token) + open a
+  `PendingPayment` order + record the key in ONE transaction committed BEFORE the charge (order
+  id = stable provider key) → charge with no DB txn open → finalize (Confirmed / PaymentFailed +
+  hold back to Active-or-Expired / ambiguous stays PendingPayment → **202**). A PaymentPending
+  hold is never expiry-reclaimed; a partial unique index enforces one live order per hold; Order
+  `xmin` blocks double-finalize; `IPaymentGateway.GetChargeStatusAsync` + `PaymentReconciliation
+  Service` settle orphaned leases (multi-replica-safe via the tokens). `AddDurablePaymentState`
+  migration. Deterministic race harness in tests (`AsyncGate`, `ControllablePaymentGateway`,
+  `FaultInterceptor`). **Still open from the plan: PR 2 (atomic refund/scan/release), PR 3
+  (RabbitMQ publisher confirms + topology), PR 4 (waiting-room Lua/token-bucket), PR 5 (prod ops).**
+- **Atomic post-payment transitions (hardening plan PR 2) is done.** Refund claims
+  `Confirmed → RefundPending` (order `xmin`) with a stable `refund:{orderId}` key so customer +
+  staff can't double-refund; ticket scan is an `xmin` compare-and-swap (`Issued → Scanned`, one
+  admission); hold release credits inventory exactly once under a race (optimistic no longer
+  re-credits on a hold-row conflict; pessimistic/redis roll back idempotently). **Policy: a
+  scanned ticket is non-refundable** (409). `AddRefundPendingAndTicketConcurrency` migration.
+  Next: PR 3 (RabbitMQ
+  publisher confirms + topology + bounded retry).
+- Current verification: 140 backend tests (60 unit + 80 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, and 5 refund/scan/release across all three reservation strategies),
   plus frontend typecheck, lint, production build, Playwright e2e (4), and live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
@@ -528,8 +548,9 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Remaining planned work: mock-interview reps; optional future depth such as reserved seating
-  or Elasticsearch search.
+- Immediate planned work: continue `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md` at **PR 3**
+  (RabbitMQ publisher confirms, topology-before-dispatch, bounded consumer retry). Mock-interview
+  reps follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

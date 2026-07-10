@@ -44,6 +44,7 @@ public static class DependencyInjection
         services.AddHostedService<OutboxDispatcher>();
         services.AddHostedService<NotificationConsumer>();
         services.AddHostedService<HoldExpiryService>();
+        services.AddHostedService<PaymentReconciliationService>();
 
         // CQRS: the projection consumer maintains the read model; the query port serves it.
         services.AddHostedService<AvailabilityProjectionConsumer>();

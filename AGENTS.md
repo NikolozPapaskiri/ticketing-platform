@@ -491,7 +491,7 @@ npm.cmd run dev
 - **Historical roadmap note:** the backend production path listed here is complete; use Latest status below for current work.
 - **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 
-## Latest status - 2026-07-10
+## Latest status - 2026-07-11
 
 This block supersedes older phase-progress lines above if they disagree.
 
@@ -504,7 +504,20 @@ This block supersedes older phase-progress lines above if they disagree.
   client, Playwright e2e, CI web job, docker-compose `web` service, the tkt.ge-style
   marketplace (M5), and the virtual waiting room (M6: Redis FIFO line, rate-limited admission
   valve, SignalR queue pushes, 429-enforced customer holds via X-Visitor-Id; staff bypasses).
-- Current verification: 129 backend tests (60 unit + 69 integration, incl. 6 waiting-room),
+- Durable payment state machine (hardening plan PR 1) is DONE: claim-before-charge with a
+  PaymentPending hold state + payment lease, order persisted before the charge (stable provider
+  key), partial unique index (one live order per hold), Hold/Order xmin tokens, GetChargeStatus
+  reconciliation on retry + a PaymentReconciliationService for orphaned leases, ambiguous outcome
+  -> 202. AddDurablePaymentState migration. Next up: PR 2 (atomic refund/scan/release).
+- Atomic post-payment transitions (hardening plan PR 2) is DONE: refund claims Confirmed ->
+  RefundPending with a stable refund:{orderId} key (customer + staff can't double-refund); ticket
+  scan is an xmin compare-and-swap (one admission); hold release credits inventory once under a
+  race across all three strategies. Policy: a scanned ticket is non-refundable (409). The
+  reconciler also settles stranded refunds (RefundClaimedAt + stable key). AddRefundPendingAnd
+  TicketConcurrency + AddRefundClaimedAt migrations. Next: PR 3 (RabbitMQ publisher confirms +
+  topology + bounded retry).
+- Current verification: 140 backend tests (60 unit + 80 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, and 5 refund/scan/release across all three reservation strategies),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
@@ -514,8 +527,9 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- Remaining planned work: mock-interview reps; optional depth such as reserved seating or
-  Elasticsearch search.
+- Immediate planned work: execute `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`, starting with the
+  durable payment state machine and deterministic race tests. Mock-interview reps follow the
+  safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

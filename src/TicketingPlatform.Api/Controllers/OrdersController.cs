@@ -8,6 +8,7 @@ using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Application.Services;
+using TicketingPlatform.Domain;
 
 namespace TicketingPlatform.Api.Controllers;
 
@@ -70,6 +71,10 @@ public class OrdersController : ControllerBase
             ct);
         return result.Error switch
         {
+            // A PendingPayment result means the provider outcome is not yet known: 202 + a stable
+            // order id the client (or reconciliation) can poll, never a lost request.
+            ResultError.None when result.Value!.Status == nameof(OrderStatus.PendingPayment) =>
+                AcceptedAtAction(nameof(GetById), new { id = result.Value.Id }, result.Value),
             ResultError.None => CreatedAtAction(nameof(GetById), new { id = result.Value!.Id }, result.Value),
             ResultError.NotFound => NotFound(),
             ResultError.Unavailable => Problem(

@@ -24,7 +24,20 @@ public class Hold
 
     public HoldStatus Status { get; private set; } = HoldStatus.Active;
 
-    /// <summary>An Active hold past its TTL. Status flips via Expire(), driven by the caller's clock.</summary>
+    /// <summary>
+    /// Set while a checkout owns this hold (PaymentPending). It is NOT a TTL: an expired lease
+    /// means "reconciliation is due", never "payment failed" - a lost provider response cannot
+    /// prove whether money moved. The reconciler queries the provider before deciding.
+    /// </summary>
+    public DateTimeOffset? PaymentLeaseUntil { get; private set; }
+
+    /// <summary>When the checkout claim was taken (audit + reconciliation ordering).</summary>
+    public DateTimeOffset? PaymentAttemptedAt { get; private set; }
+
+    /// <summary>When a payment outcome was finally resolved (confirmed, declined, or reconciled).</summary>
+    public DateTimeOffset? PaymentReconciledAt { get; private set; }
+
+    /// <summary>An Active hold past its TTL. A PaymentPending hold is deliberately NOT expirable here.</summary>
     public bool IsExpired(DateTimeOffset now) => Status == HoldStatus.Active && now >= ExpiresAt;
 
     public bool CanRelease => Status == HoldStatus.Active;
@@ -43,19 +56,66 @@ public class Hold
         Status = HoldStatus.Expired;
     }
 
-    /// <summary>A paid hold becomes a sale: the reserved quantity is now permanently sold.</summary>
-    public void Confirm()
+    /// <summary>
+    /// Take ownership for a payment attempt: Active -> PaymentPending. The DB update that persists
+    /// this is guarded by the row's concurrency token, so exactly one checkout can win the claim;
+    /// the loser's save conflicts and it returns a 409.
+    /// </summary>
+    public void ClaimForPayment(DateTimeOffset now, DateTimeOffset leaseUntil)
     {
         if (Status != HoldStatus.Active)
-            throw new InvalidOperationException($"Cannot confirm a hold in status '{Status}'.");
+            throw new InvalidOperationException($"Cannot claim a hold in status '{Status}' for payment.");
+        if (now >= ExpiresAt)
+            throw new InvalidOperationException("Cannot claim an expired hold for payment.");
+        Status = HoldStatus.PaymentPending;
+        PaymentLeaseUntil = leaseUntil;
+        PaymentAttemptedAt = now;
+    }
+
+    /// <summary>Provider confirmed the charge: PaymentPending -> Confirmed (permanently sold).</summary>
+    public void ConfirmFromPayment(DateTimeOffset now)
+    {
+        if (Status != HoldStatus.PaymentPending)
+            throw new InvalidOperationException($"Cannot confirm a hold in status '{Status}' from payment.");
         Status = HoldStatus.Confirmed;
+        PaymentLeaseUntil = null;
+        PaymentReconciledAt = now;
+    }
+
+    /// <summary>Definitive decline while the TTL still holds: PaymentPending -> Active (buyer may retry).</summary>
+    public void ReturnToActiveFromPayment(DateTimeOffset now)
+    {
+        if (Status != HoldStatus.PaymentPending)
+            throw new InvalidOperationException($"Cannot reactivate a hold in status '{Status}'.");
+        Status = HoldStatus.Active;
+        PaymentLeaseUntil = null;
+        PaymentReconciledAt = now;
+    }
+
+    /// <summary>Reconciliation proved no charge and the TTL has passed: PaymentPending -> Expired.</summary>
+    public void ExpireFromPayment(DateTimeOffset now)
+    {
+        if (Status != HoldStatus.PaymentPending)
+            throw new InvalidOperationException($"Cannot expire a hold in status '{Status}' from payment.");
+        Status = HoldStatus.Expired;
+        PaymentLeaseUntil = null;
+        PaymentReconciledAt = now;
+    }
+
+    /// <summary>Ambiguous provider outcome: keep the claim but push the reconciliation deadline out.</summary>
+    public void ExtendPaymentLease(DateTimeOffset leaseUntil)
+    {
+        if (Status != HoldStatus.PaymentPending)
+            throw new InvalidOperationException($"Cannot extend the lease of a hold in status '{Status}'.");
+        PaymentLeaseUntil = leaseUntil;
     }
 }
 
 public enum HoldStatus
 {
-    Active,     // reserving inventory
-    Confirmed,  // converted to a purchase (Phase 5)
-    Released,   // given back explicitly
-    Expired     // given back by TTL
+    Active,          // reserving inventory
+    PaymentPending,  // a checkout owns it while payment is in flight (durable, leased)
+    Confirmed,       // converted to a purchase
+    Released,        // given back explicitly
+    Expired          // given back by TTL or by reconciliation proving no charge
 }
