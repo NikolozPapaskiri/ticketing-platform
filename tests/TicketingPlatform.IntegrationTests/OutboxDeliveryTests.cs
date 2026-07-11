@@ -58,6 +58,89 @@ public sealed class OutboxDeliveryTests
         }
     }
 
+    [Fact]
+    public async Task Outbox_UnroutableMessage_IsBackedOffAfterFailure()
+    {
+        var probeId = await InsertProbeAsync();
+
+        try
+        {
+            var firstFailure = await WaitForAttemptAsync(probeId);
+            var attemptsAfterFailure = firstFailure.Attempts;
+
+            // The test factory configures a 30-second base delay. A failed row must therefore
+            // not be selected again by the dispatcher's one-second polling loop during this
+            // observation window. The current implementation retries it on every poll.
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            var afterBackoffWindow = await ReadAsync(probeId);
+            Assert.NotNull(afterBackoffWindow);
+            Assert.Equal(attemptsAfterFailure, afterBackoffWindow!.Attempts);
+            Assert.Null(afterBackoffWindow.ProcessedAt);
+        }
+        finally
+        {
+            await DeleteAsync(probeId);
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_MessageAtAttemptCap_IsNotDispatchedAgain()
+    {
+        // The configured cap is two. Seed a failed message at the cap and prove the dispatcher
+        // does not keep publishing it forever. A later implementation will make the terminal
+        // failure operator-visible; this test first pins the bounded-delivery invariant.
+        var probeId = await InsertProbeAsync(attempts: 2);
+
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            var row = await ReadAsync(probeId);
+            Assert.NotNull(row);
+            Assert.Equal(2, row!.Attempts);
+            Assert.Null(row.ProcessedAt);
+        }
+        finally
+        {
+            await DeleteAsync(probeId);
+        }
+    }
+
+    private async Task<Guid> InsertProbeAsync(int attempts = 0)
+    {
+        var probeId = Guid.NewGuid();
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = probeId,
+                Type = "UnroutableProbe",
+                Payload = "{}",
+                OccurredAt = DateTimeOffset.UtcNow,
+                Attempts = attempts
+            });
+            await db.SaveChangesAsync();
+        });
+        return probeId;
+    }
+
+    private async Task<OutboxMessage> WaitForAttemptAsync(Guid id)
+    {
+        for (var i = 0; i < 20; i++)
+        {
+            await Task.Delay(500);
+            var row = await ReadAsync(id);
+            if (row is { Attempts: > 0 })
+                return row;
+        }
+
+        throw new Xunit.Sdk.XunitException("the dispatcher never attempted the probe within 10s");
+    }
+
+    private Task DeleteAsync(Guid id) =>
+        WithDbAsync(db => db.OutboxMessages.Where(m => m.Id == id).ExecuteDeleteAsync());
+
     private async Task<OutboxMessage?> ReadAsync(Guid id)
     {
         using var scope = _factory.Services.CreateScope();

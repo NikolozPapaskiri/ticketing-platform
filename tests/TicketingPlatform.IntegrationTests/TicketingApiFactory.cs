@@ -40,6 +40,10 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
         builder.UseSetting("RabbitMq:Port", _rabbit.GetMappedPublicPort(5672).ToString());
         builder.UseSetting("RabbitMq:UserName", "ticketing");
         builder.UseSetting("RabbitMq:Password", "ticketing");
+        // Deliberately long so the outbox retry tests can prove a failed publish is scheduled
+        // rather than retried by every one-second dispatcher poll.
+        builder.UseSetting("RabbitMq:OutboxRetryBaseSeconds", "30");
+        builder.UseSetting("RabbitMq:OutboxMaxAttempts", "2");
         builder.UseSetting("PaymentProvider:BaseUrl", PaymentProvider.Urls[0] + "/");
         builder.UseSetting("PaymentProvider:RetryBaseDelayMs", "50"); // fast retry storms in tests
         builder.UseSetting("RateLimiting:AuthRequestsPerMinute", "100000"); // the suite logs in constantly
