@@ -514,10 +514,17 @@ This block supersedes older phase-progress lines above if they disagree.
   scan is an xmin compare-and-swap (one admission); hold release credits inventory once under a
   race across all three strategies. Policy: a scanned ticket is non-refundable (409). The
   reconciler also settles stranded refunds (RefundClaimedAt + stable key). AddRefundPendingAnd
-  TicketConcurrency + AddRefundClaimedAt migrations. Next: PR 3 (RabbitMQ publisher confirms +
-  topology + bounded retry).
-- Current verification: 140 backend tests (60 unit + 80 integration, incl. 6 waiting-room, 6
-  payment-race/reconciliation, and 5 refund/scan/release across all three reservation strategies),
+  TicketConcurrency + AddRefundClaimedAt migrations.
+- RabbitMQ delivery hardening (PR 3) is IN PROGRESS: topology is initialized before dispatch;
+  outbox publication uses confirms + mandatory routing; failed publishes use persistent exponential
+  backoff and operator-visible quarantine; all three consumers use durable per-consumer/per-event
+  TTL retry queues with an attempt header and bounded dead-lettering. Poison JSON parks immediately;
+  transient storage failure retries and succeeds; exhausted failures park after exactly three
+  attempts. Remaining PR 3 work: versioned integration-event envelopes, broker-disconnect-before-
+  confirm test, duplicate ticket-issuer delivery test, and explicit topology-ready test.
+- Current verification: 147 backend tests (60 unit + 87 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and
+  7 outbox/consumer-delivery tests),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
@@ -527,8 +534,8 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- Immediate planned work: execute `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`, starting with the
-  durable payment state machine and deterministic race tests. Mock-interview reps follow the
+- Immediate planned work: finish the PR 3 tail in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`, then
+  execute PR 4 waiting-room atomicity/global admission control. Mock-interview reps follow the
   safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest

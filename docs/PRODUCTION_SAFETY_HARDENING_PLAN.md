@@ -377,7 +377,7 @@ Required tests for every reservation strategy:
 
 ## PR 3: RabbitMQ publication and consumer reliability
 
-**Status: IN PROGRESS — the P0 (no silent event loss) is DONE** on branch
+**Status: IN PROGRESS — publication safety and bounded consumer retry are DONE** on branch
 `feature/rabbitmq-delivery-safety`: a `RabbitMqTopologyInitializer` declares the exchange, DLX,
 and every consumer queue + binding as a plain `IHostedService` whose `StartAsync` completes
 BEFORE the dispatcher starts (§3.1), and the dispatcher now publishes with **publisher confirms +
@@ -385,14 +385,21 @@ tracking** and `mandatory: true`, marking a row processed only after the broker 
 returned/unconfirmed message in the outbox for retry (§3.2). Shared `RabbitMqTopology` is the one
 source of truth; this also fixed a latent bug — `OrderRefunded` had **no binding** and was being
 silently dropped, so it is now routed to `notifications` (which handles both confirm and refund).
-Test `Outbox_UnroutableMessage_RemainsUnprocessed`; 141 tests green.
 
-**Still open (PR 3 tail):** §3.3 bounded transient consumer retries (retry queue with TTL +
-attempt cap before dead-lettering, instead of dead-lettering on the first exception); §3.4
-versioned integration-event envelopes replacing anonymous JSON; and the remaining §3.5 tests
-(`Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage`, `Consumer_TransientFailure_RetriesThen
-Succeeds`, `Consumer_InvalidPayload_DeadLettersWithoutInfiniteLoop`, the duplicate-delivery
-ticket-issuer test, and an explicit topology-ready test).
+The dispatcher also has persistent exponential retry scheduling (`NextAttemptAt`), a configurable
+attempt budget, and operator-visible quarantine (`FailedAt` + `LastError`) instead of hot-looping
+an unroutable row. Consumers share one failure policy: malformed payloads dead-letter immediately;
+transient failures publish with confirms to durable per-consumer/per-event TTL retry queues, carry
+an attempt header, and park after the configured total-attempt bound. Per-event retry queues avoid
+fan-out contamination when two consumers subscribe to `OrderConfirmed`. The availability
+projection records dedupe only after its SignalR side effect, so a transient broadcast failure is
+actually retried (a duplicate absolute-state push after a crash is safe). Tests cover outbox
+backoff/quarantine, transient recovery, bounded exhaustion, and poison payloads. 147 backend tests
+green (60 unit + 87 integration) against real PostgreSQL, Redis, and RabbitMQ.
+
+**Still open (PR 3 tail):** §3.4 versioned integration-event envelopes replacing anonymous JSON;
+and the remaining §3.5 tests (`Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage`, the
+duplicate-delivery ticket-issuer test, and an explicit topology-ready test).
 
 Suggested branch: `feature/rabbitmq-delivery-safety`
 

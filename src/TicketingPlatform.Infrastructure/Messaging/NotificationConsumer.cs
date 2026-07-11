@@ -18,8 +18,8 @@ namespace TicketingPlatform.Infrastructure.Messaging;
 /// non-negotiables of at-least-once messaging:
 ///  - IDEMPOTENCY: dedupe by MessageId against the ProcessedMessages table, checked and
 ///    recorded in the SAME transaction as the side effect - a redelivered message is a no-op.
-///  - POISON HANDLING: a message that throws is nack'd WITHOUT requeue, which routes it to the
-///    dead-letter exchange instead of looping through the queue forever, eating the consumer.
+///  - FAILURE HANDLING: malformed messages park immediately; operational failures pass through
+///    the shared durable retry queues and are dead-lettered after a configured attempt bound.
 /// </summary>
 public sealed class NotificationConsumer : BackgroundService
 {
@@ -66,7 +66,8 @@ public sealed class NotificationConsumer : BackgroundService
         };
 
         await using var connection = await factory.CreateConnectionAsync(ct);
-        await using var channel = await connection.CreateChannelAsync(cancellationToken: ct);
+        await using var channel = await connection.CreateChannelAsync(
+            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true), ct);
 
         await RabbitMqTopology.DeclareAsync(channel, _options, ct);
         await channel.BasicQosAsync(0, prefetchCount: 1, global: false, ct); // one message at a time
@@ -81,9 +82,8 @@ public sealed class NotificationConsumer : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Poison message {MessageId}; dead-lettering", ea.BasicProperties.MessageId);
-                // requeue: false -> the DLX takes it. Requeue: true here would spin forever.
-                await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, ct);
+                await ConsumerRetryPolicy.HandleFailureAsync(channel, ea,
+                    RabbitMqTopology.NotificationsQueue, ex, _options, _logger, ct);
             }
         };
 

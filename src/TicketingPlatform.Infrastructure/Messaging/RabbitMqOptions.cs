@@ -20,4 +20,10 @@ public sealed class RabbitMqOptions
 
     /// <summary>Maximum publish attempts before the row is quarantined for operator action.</summary>
     public int OutboxMaxAttempts { get; init; } = 10;
+
+    /// <summary>Delay applied by each consumer's durable retry queue.</summary>
+    public int ConsumerRetryDelayMilliseconds { get; init; } = 5000;
+
+    /// <summary>Total handler attempts, including the original delivery, before dead-lettering.</summary>
+    public int ConsumerMaxAttempts { get; init; } = 3;
 }

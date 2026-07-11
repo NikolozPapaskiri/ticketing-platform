@@ -19,7 +19,8 @@ namespace TicketingPlatform.Infrastructure.Messaging;
 /// Second consumer of OrderConfirmed (fan-out: same event, own queue, own dedupe row):
 /// renders the ticket PDF, stores it via the IFileStorage port, records the Ticket row.
 /// Issuing tickets asynchronously keeps the checkout latency free of PDF rendering - the
-/// buyer's 201 never waits for a document.
+/// buyer's 201 never waits for a document. Transient storage/DB failures use the shared durable
+/// retry policy; malformed events and exhausted attempts are parked in the dead-letter queue.
 /// </summary>
 public sealed class TicketIssuerConsumer : BackgroundService
 {
@@ -66,16 +67,10 @@ public sealed class TicketIssuerConsumer : BackgroundService
         };
 
         await using var connection = await factory.CreateConnectionAsync(ct);
-        await using var channel = await connection.CreateChannelAsync(cancellationToken: ct);
+        await using var channel = await connection.CreateChannelAsync(
+            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true), ct);
 
-        await channel.ExchangeDeclareAsync(_options.Exchange, ExchangeType.Topic, durable: true, cancellationToken: ct);
-        await channel.ExchangeDeclareAsync(_options.DeadLetterExchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
-        // Own queue on the same routing key as the notification consumer: the topic exchange
-        // copies OrderConfirmed into BOTH queues - that is how fan-out works, not shared reads.
-        await channel.QueueDeclareAsync("ticket-issuer", durable: true, exclusive: false, autoDelete: false,
-            arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = _options.DeadLetterExchange },
-            cancellationToken: ct);
-        await channel.QueueBindAsync("ticket-issuer", _options.Exchange, routingKey: "OrderConfirmed", cancellationToken: ct);
+        await RabbitMqTopology.DeclareAsync(channel, _options, ct);
 
         await channel.BasicQosAsync(0, prefetchCount: 1, global: false, ct);
 
@@ -89,12 +84,12 @@ public sealed class TicketIssuerConsumer : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Poison message {MessageId} in ticket issuer; dead-lettering", ea.BasicProperties.MessageId);
-                await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, ct);
+                await ConsumerRetryPolicy.HandleFailureAsync(channel, ea,
+                    RabbitMqTopology.TicketIssuerQueue, ex, _options, _logger, ct);
             }
         };
 
-        await channel.BasicConsumeAsync("ticket-issuer", autoAck: false, consumer, ct);
+        await channel.BasicConsumeAsync(RabbitMqTopology.TicketIssuerQueue, autoAck: false, consumer, ct);
         await Task.Delay(Timeout.InfiniteTimeSpan, ct);
     }
 
