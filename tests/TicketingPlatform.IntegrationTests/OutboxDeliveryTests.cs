@@ -1,5 +1,8 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RabbitMQ.Client;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
 
@@ -137,6 +140,54 @@ public sealed class OutboxDeliveryTests
         }
     }
 
+    [Fact]
+    public async Task Outbox_PublishesVersionedIntegrationEventEnvelope()
+    {
+        await using var connection = await CreateRabbitConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        var queue = await channel.QueueDeclareAsync(queue: string.Empty, durable: false,
+            exclusive: true, autoDelete: true);
+        await channel.QueueBindAsync(queue.QueueName, "ticketing-events", "AvailabilityChanged");
+
+        var messageId = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var ticketTypeId = Guid.NewGuid();
+        var occurredAt = DateTimeOffset.UtcNow;
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = messageId,
+                Type = "AvailabilityChanged",
+                Payload = JsonSerializer.Serialize(new { tenantId, eventId, ticketTypeId }),
+                OccurredAt = occurredAt
+            });
+            await db.SaveChangesAsync();
+        });
+
+        BasicGetResult? delivery = null;
+        for (var i = 0; i < 40 && delivery is null; i++)
+        {
+            delivery = await channel.BasicGetAsync(queue.QueueName, autoAck: false);
+            if (delivery is null)
+                await Task.Delay(250);
+        }
+
+        Assert.NotNull(delivery);
+        using var body = JsonDocument.Parse(Encoding.UTF8.GetString(delivery!.Body.Span));
+        var root = body.RootElement;
+        Assert.Equal(messageId, root.GetProperty("messageId").GetGuid());
+        Assert.Equal("AvailabilityChanged", root.GetProperty("eventType").GetString());
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(tenantId, root.GetProperty("tenantId").GetGuid());
+        Assert.Equal(ticketTypeId, root.GetProperty("payload").GetProperty("ticketTypeId").GetGuid());
+        Assert.Equal(messageId.ToString(), delivery.BasicProperties.MessageId);
+        await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false);
+
+        await DeleteAsync(messageId);
+    }
+
     private async Task<Guid> InsertProbeAsync(int attempts = 0)
     {
         var probeId = Guid.NewGuid();
@@ -170,6 +221,18 @@ public sealed class OutboxDeliveryTests
 
     private Task DeleteAsync(Guid id) =>
         WithDbAsync(db => db.OutboxMessages.Where(m => m.Id == id).ExecuteDeleteAsync());
+
+    private async Task<IConnection> CreateRabbitConnectionAsync()
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _factory.RabbitHost,
+            Port = _factory.RabbitPort,
+            UserName = "ticketing",
+            Password = "ticketing"
+        };
+        return await factory.CreateConnectionAsync();
+    }
 
     private async Task<OutboxMessage?> ReadAsync(Guid id)
     {
