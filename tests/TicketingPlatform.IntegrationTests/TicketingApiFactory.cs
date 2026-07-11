@@ -1,10 +1,13 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
 using Testcontainers.Redis;
+using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Infrastructure.Persistence;
 using WireMock.Server;
 
@@ -30,6 +33,8 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
 
     /// <summary>Scriptable payment provider. Tests reset + stub it per scenario.</summary>
     public WireMockServer PaymentProvider { get; } = WireMockServer.Start();
+    public string RabbitHost => _rabbit.Hostname;
+    public int RabbitPort => _rabbit.GetMappedPublicPort(5672);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -44,12 +49,20 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
         // rather than retried by every one-second dispatcher poll.
         builder.UseSetting("RabbitMq:OutboxRetryBaseSeconds", "30");
         builder.UseSetting("RabbitMq:OutboxMaxAttempts", "2");
+        builder.UseSetting("RabbitMq:ConsumerRetryDelayMilliseconds", "500");
+        builder.UseSetting("RabbitMq:ConsumerMaxAttempts", "3");
         builder.UseSetting("PaymentProvider:BaseUrl", PaymentProvider.Urls[0] + "/");
         builder.UseSetting("PaymentProvider:RetryBaseDelayMs", "50"); // fast retry storms in tests
         builder.UseSetting("RateLimiting:AuthRequestsPerMinute", "100000"); // the suite logs in constantly
         builder.UseSetting("WaitingRoom:AdmitBatchSize", "1");   // one admission per tick => positions observable
         builder.UseSetting("WaitingRoom:AdmitIntervalSeconds", "1"); // fast valve so queue tests finish in seconds
         builder.UseSetting("FileStorage:Root", Path.Combine(Path.GetTempPath(), $"ticketing-tests-{Guid.NewGuid():N}"));
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IFileStorage>();
+            services.AddSingleton<TransientFileStorage>();
+            services.AddSingleton<IFileStorage>(sp => sp.GetRequiredService<TransientFileStorage>());
+        });
         builder.UseEnvironment("Development");
     }
 
