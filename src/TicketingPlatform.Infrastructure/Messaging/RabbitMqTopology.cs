@@ -1,4 +1,5 @@
 using RabbitMQ.Client;
+using TicketingPlatform.Application.Contracts;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
@@ -35,9 +36,12 @@ public static class RabbitMqTopology
 
         var deadLetter = new Dictionary<string, object?> { ["x-dead-letter-exchange"] = options.DeadLetterExchange };
 
-        await DeclareBoundQueueAsync(channel, NotificationsQueue, options, deadLetter, ct, "OrderConfirmed", "OrderRefunded");
-        await DeclareBoundQueueAsync(channel, AvailabilityProjectionQueue, options, deadLetter, ct, "AvailabilityChanged");
-        await DeclareBoundQueueAsync(channel, TicketIssuerQueue, options, deadLetter, ct, "OrderConfirmed");
+        await DeclareBoundQueueAsync(channel, NotificationsQueue, options, deadLetter, ct,
+            IntegrationEventNames.OrderConfirmed, IntegrationEventNames.OrderRefunded);
+        await DeclareBoundQueueAsync(channel, AvailabilityProjectionQueue, options, deadLetter, ct,
+            IntegrationEventNames.AvailabilityChanged);
+        await DeclareBoundQueueAsync(channel, TicketIssuerQueue, options, deadLetter, ct,
+            IntegrationEventNames.OrderConfirmed);
     }
 
     private static async Task DeclareBoundQueueAsync(IChannel channel, string queue, RabbitMqOptions options,

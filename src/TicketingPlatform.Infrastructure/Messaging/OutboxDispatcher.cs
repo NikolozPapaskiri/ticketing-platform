@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
-using System.Text;
+using System.Text.Json;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Infrastructure.Persistence;
 
@@ -89,6 +89,9 @@ public sealed class OutboxDispatcher : BackgroundService
             var properties = new BasicProperties
             {
                 MessageId = message.Id.ToString(), // the consumer's dedupe handle
+                CorrelationId = message.CorrelationId,
+                ContentType = "application/json",
+                Type = message.Type,
                 Persistent = true,                 // survive a broker restart
                 Headers = activity is null
                     ? null
@@ -97,6 +100,7 @@ public sealed class OutboxDispatcher : BackgroundService
 
             try
             {
+                var body = IntegrationEventEnvelopeCodec.Serialize(message);
                 // Publisher confirms + tracking are enabled on the channel, so this await does not
                 // complete until RabbitMQ has ACKED the publish. mandatory:true means an unroutable
                 // message (no binding) is RETURNED and surfaces as a PublishException instead of
@@ -107,7 +111,7 @@ public sealed class OutboxDispatcher : BackgroundService
                     routingKey: message.Type,
                     mandatory: true,
                     basicProperties: properties,
-                    body: Encoding.UTF8.GetBytes(message.Payload),
+                    body: body,
                     cancellationToken: ct);
 
                 message.ProcessedAt = DateTimeOffset.UtcNow;
@@ -145,6 +149,20 @@ public sealed class OutboxDispatcher : BackgroundService
                         message.Id, message.Type, ex.IsReturn, message.Attempts,
                         MaxAttempts, message.NextAttemptAt);
                 }
+            }
+            catch (Exception ex) when (ex is JsonException or IntegrationEventContractException)
+            {
+                // An invalid row is an internal poison message. Retrying cannot repair its JSON or
+                // metadata, so quarantine it immediately instead of blocking the polling batch.
+                message.Attempts++;
+                message.FailedAt = DateTimeOffset.UtcNow;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+                message.LastError = Truncate(ex.Message, 2000);
+                _logger.LogError(ex,
+                    "Outbox message {MessageId} ({Type}) has an invalid integration-event contract and was quarantined",
+                    message.Id, message.Type);
             }
         }
 

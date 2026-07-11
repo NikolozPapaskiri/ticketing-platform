@@ -30,6 +30,7 @@ public sealed class OutboxDeliveryTests
             {
                 Id = probeId,
                 Type = "UnroutableProbe", // no queue binds this key => mandatory publish is returned
+                TenantId = Guid.NewGuid(),
                 Payload = "{}",
                 OccurredAt = DateTimeOffset.UtcNow
             });
@@ -160,6 +161,7 @@ public sealed class OutboxDeliveryTests
             {
                 Id = messageId,
                 Type = "AvailabilityChanged",
+                CorrelationId = "envelope-contract-test",
                 Payload = JsonSerializer.Serialize(new { tenantId, eventId, ticketTypeId }),
                 OccurredAt = occurredAt
             });
@@ -181,6 +183,9 @@ public sealed class OutboxDeliveryTests
         Assert.Equal("AvailabilityChanged", root.GetProperty("eventType").GetString());
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(tenantId, root.GetProperty("tenantId").GetGuid());
+        Assert.Equal("envelope-contract-test", root.GetProperty("correlationId").GetString());
+        Assert.Equal(occurredAt.ToUnixTimeMilliseconds(),
+            root.GetProperty("occurredAt").GetDateTimeOffset().ToUnixTimeMilliseconds());
         Assert.Equal(ticketTypeId, root.GetProperty("payload").GetProperty("ticketTypeId").GetGuid());
         Assert.Equal(messageId.ToString(), delivery.BasicProperties.MessageId);
         await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false);
@@ -197,6 +202,7 @@ public sealed class OutboxDeliveryTests
             {
                 Id = probeId,
                 Type = "UnroutableProbe",
+                TenantId = Guid.NewGuid(),
                 Payload = "{}",
                 OccurredAt = DateTimeOffset.UtcNow,
                 Attempts = attempts

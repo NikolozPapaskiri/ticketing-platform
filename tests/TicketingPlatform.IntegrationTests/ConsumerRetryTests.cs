@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RabbitMQ.Client;
@@ -69,7 +70,8 @@ public sealed class ConsumerRetryTests
             {
                 Id = probeId,
                 Type = "AvailabilityChanged",
-                Payload = "{not-json",
+                TenantId = Guid.NewGuid(),
+                Payload = "{\"eventId\":\"00000000-0000-0000-0000-000000000000\",\"ticketTypeId\":\"not-a-guid\"}",
                 OccurredAt = DateTimeOffset.UtcNow
             });
             await db.SaveChangesAsync();
@@ -84,6 +86,41 @@ public sealed class ConsumerRetryTests
         Assert.Equal(firstCount, finalCount);
 
         await WithDbAsync(db => db.OutboxMessages.Where(m => m.Id == probeId).ExecuteDeleteAsync());
+    }
+
+    [Fact]
+    public async Task Consumer_UnsupportedSchemaVersion_DeadLettersWithoutRetry()
+    {
+        await PurgeAsync(RabbitMqTopology.DeadLetterQueue);
+        var messageId = Guid.NewGuid();
+        var body = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            messageId,
+            eventType = "AvailabilityChanged",
+            schemaVersion = 2,
+            occurredAt = DateTimeOffset.UtcNow,
+            tenantId = Guid.NewGuid(),
+            correlationId = "unsupported-version-test",
+            payload = new { eventId = Guid.NewGuid(), ticketTypeId = Guid.NewGuid() }
+        });
+
+        await using (var connection = await CreateRabbitConnectionAsync())
+        await using (var channel = await connection.CreateChannelAsync())
+        {
+            var properties = new BasicProperties
+            {
+                MessageId = messageId.ToString(),
+                ContentType = "application/json",
+                Persistent = true
+            };
+            await channel.BasicPublishAsync("ticketing-events", "AvailabilityChanged",
+                mandatory: true, properties, body);
+        }
+
+        var parked = await WaitForQueueCountAsync(RabbitMqTopology.DeadLetterQueue, minimum: 1);
+        Assert.True(parked, "unsupported schema version was not parked");
+        Assert.Equal(0u, await GetQueueCountAsync(
+            RabbitMqTopology.RetryQueueName(RabbitMqTopology.AvailabilityProjectionQueue, "AvailabilityChanged")));
     }
 
     private async Task<(string Staff, HoldDto Hold)> SetupHoldAsync()

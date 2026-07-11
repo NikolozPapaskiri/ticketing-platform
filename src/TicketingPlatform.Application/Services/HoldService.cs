@@ -64,12 +64,8 @@ public sealed class HoldService
         // together with the decrement + hold row (same scoped DbContext = same transaction).
         // On a Conflict the strategy never saves, so the staged row dies with the request scope.
         // The projection consumer re-reads live availability, so the event only needs ids.
-        _outbox.Add("AvailabilityChanged", new
-        {
-            TenantId = tenantId,
-            inventory.TicketType.EventId,
-            TicketTypeId = request.TicketTypeId
-        });
+        _outbox.Add(new AvailabilityChangedIntegrationEvent(
+            tenantId, inventory.TicketType.EventId, request.TicketTypeId));
 
         // The contention-safe part. Insufficient stock (or a lost race) comes back as Conflict.
         var reserved = await _reservation.ReserveAsync(hold, ct);
@@ -122,12 +118,8 @@ public sealed class HoldService
         hold.Release();
 
         // Same pattern as CreateAsync: staged before the strategy's save commits everything.
-        _outbox.Add("AvailabilityChanged", new
-        {
-            hold.TenantId,
-            hold.TicketType.EventId,
-            hold.TicketTypeId
-        });
+        _outbox.Add(new AvailabilityChangedIntegrationEvent(
+            hold.TenantId, hold.TicketType.EventId, hold.TicketTypeId));
 
         await _reservation.ReleaseAsync(hold, ct); // credits inventory + persists the status flip
 

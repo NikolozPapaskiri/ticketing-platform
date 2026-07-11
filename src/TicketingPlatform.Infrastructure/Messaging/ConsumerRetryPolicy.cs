@@ -94,5 +94,6 @@ internal static class ConsumerRetryPolicy
     }
 
     private static bool IsPoison(Exception failure) => failure is
-        JsonException or FormatException or KeyNotFoundException or ArgumentException;
+        JsonException or IntegrationEventContractException or FormatException
+        or KeyNotFoundException or ArgumentException;
 }

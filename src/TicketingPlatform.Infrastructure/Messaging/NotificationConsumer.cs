@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
@@ -100,11 +101,12 @@ public sealed class NotificationConsumer : BackgroundService
         string? traceParent = null;
         if (ea.BasicProperties.Headers?.TryGetValue("traceparent", out var raw) == true && raw is byte[] bytes)
             traceParent = Encoding.UTF8.GetString(bytes);
-        var eventType = ea.RoutingKey; // "OrderConfirmed" or "OrderRefunded"
+        var eventType = ea.RoutingKey;
         using var activity = MessagingDiagnostics.Source.StartActivity(
             $"consume {eventType}", System.Diagnostics.ActivityKind.Consumer, traceParent);
 
-        var messageId = Guid.Parse(ea.BasicProperties.MessageId!);
+        var envelope = IntegrationEventEnvelopeCodec.Read(ea);
+        var messageId = envelope.MessageId;
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
@@ -114,18 +116,21 @@ public sealed class NotificationConsumer : BackgroundService
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
             return;
 
-        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
-        var root = payload.RootElement;
-        var verb = eventType == "OrderRefunded" ? "refunded" : "confirmed";
+        var details = eventType switch
+        {
+            IntegrationEventNames.OrderConfirmed => ConfirmedDetails(envelope),
+            IntegrationEventNames.OrderRefunded => RefundedDetails(envelope),
+            _ => throw new IntegrationEventContractException(
+                $"Notification consumer does not support event type '{eventType}'.")
+        };
 
         db.Notifications.Add(new Notification
         {
             Id = Guid.NewGuid(),
-            TenantId = root.GetProperty("tenantId").GetGuid(),
+            TenantId = envelope.TenantId,
             Type = eventType,
-            Message = $"Order {root.GetProperty("orderId").GetGuid()} {verb} for " +
-                      $"{root.GetProperty("customerEmail").GetString()}: " +
-                      $"{root.GetProperty("amount").GetDecimal()} {root.GetProperty("currency").GetString()}",
+            Message = $"Order {details.OrderId} {details.Verb} for {details.CustomerEmail}: " +
+                      $"{details.Amount} {details.Currency}",
             CreatedAt = DateTimeOffset.UtcNow
         });
         db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, Consumer = consumerName, ProcessedAt = DateTimeOffset.UtcNow });
@@ -134,4 +139,19 @@ public sealed class NotificationConsumer : BackgroundService
         await db.SaveChangesAsync(ct);
         _logger.LogInformation("Notification written for message {MessageId}", messageId);
     }
+
+    private static NotificationDetails ConfirmedDetails(IntegrationEventEnvelope envelope)
+    {
+        var message = IntegrationEventEnvelopeCodec.ReadPayload<OrderConfirmedIntegrationEvent>(envelope);
+        return new(message.OrderId, message.CustomerEmail, message.Amount, message.Currency, "confirmed");
+    }
+
+    private static NotificationDetails RefundedDetails(IntegrationEventEnvelope envelope)
+    {
+        var message = IntegrationEventEnvelopeCodec.ReadPayload<OrderRefundedIntegrationEvent>(envelope);
+        return new(message.OrderId, message.CustomerEmail, message.Amount, message.Currency, "refunded");
+    }
+
+    private sealed record NotificationDetails(
+        Guid OrderId, string CustomerEmail, decimal Amount, string Currency, string Verb);
 }

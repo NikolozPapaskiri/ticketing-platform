@@ -7,5 +7,16 @@ namespace TicketingPlatform.Application.Abstractions;
 /// </summary>
 public interface IOutbox
 {
-    void Add(string type, object payload);
+    void Add(IIntegrationEvent message);
+}
+
+/// <summary>
+/// Compile-time contract for messages that leave the application boundary. The outbox persists
+/// these metadata values separately from the payload so a dispatcher never has to infer them.
+/// </summary>
+public interface IIntegrationEvent
+{
+    string EventType { get; }
+    int SchemaVersion { get; }
+    Guid TenantId { get; }
 }

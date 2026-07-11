@@ -491,7 +491,7 @@ npm.cmd run dev
 - **Historical roadmap note:** the backend production path listed here is complete; use Latest status below for current work.
 - **Decision (recorded 2026-07):** the platform stays **self-contained** — no external auth server or third-party project integration; everything is built in this repository per the original plan.
 
-## Latest status - 2026-07-11
+## Latest status - 2026-07-12
 
 This block supersedes older phase-progress lines above if they disagree.
 
@@ -520,11 +520,14 @@ This block supersedes older phase-progress lines above if they disagree.
   backoff and operator-visible quarantine; all three consumers use durable per-consumer/per-event
   TTL retry queues with an attempt header and bounded dead-lettering. Poison JSON parks immediately;
   transient storage failure retries and succeeds; exhausted failures park after exactly three
-  attempts. Remaining PR 3 work: versioned integration-event envelopes, broker-disconnect-before-
-  confirm test, duplicate ticket-issuer delivery test, and explicit topology-ready test.
-- Current verification: 147 backend tests (60 unit + 87 integration, incl. 6 waiting-room, 6
+  attempts. Integration events are typed at the Application boundary and published inside a
+  versioned envelope whose identity/version/tenant metadata is validated before consumer side
+  effects; unsupported versions park immediately. AddIntegrationEventEnvelopeMetadata migration.
+  Remaining PR 3 work: broker-disconnect-before-confirm test, duplicate ticket-issuer delivery
+  test, explicit topology-ready test, and the completion-gate messaging metrics.
+- Current verification: 149 backend tests (60 unit + 89 integration, incl. 6 waiting-room, 6
   payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and
-  7 outbox/consumer-delivery tests),
+  9 outbox/envelope/consumer-delivery tests),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.

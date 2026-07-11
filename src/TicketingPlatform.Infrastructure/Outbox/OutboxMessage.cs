@@ -18,6 +18,15 @@ public class OutboxMessage
     /// <summary>JSON payload of the event.</summary>
     public required string Payload { get; set; }
 
+    /// <summary>Version of the payload contract, independent from the envelope format.</summary>
+    public int SchemaVersion { get; set; } = 1;
+
+    /// <summary>Tenant copied to envelope metadata; nullable only for rows created before migration.</summary>
+    public Guid? TenantId { get; set; }
+
+    /// <summary>Stable trace correlation id captured when the outbox row is created.</summary>
+    public string? CorrelationId { get; set; }
+
     public DateTimeOffset OccurredAt { get; set; }
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }

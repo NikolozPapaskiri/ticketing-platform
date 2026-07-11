@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -8,6 +6,7 @@ using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.ReadModels;
@@ -97,7 +96,8 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
 
     private async Task HandleAsync(BasicDeliverEventArgs ea, CancellationToken ct)
     {
-        var messageId = Guid.Parse(ea.BasicProperties.MessageId!);
+        var envelope = IntegrationEventEnvelopeCodec.Read(ea);
+        var messageId = envelope.MessageId;
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
@@ -106,8 +106,8 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
             return; // at-least-once: seen it, skip it
 
-        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
-        var ticketTypeId = payload.RootElement.GetProperty("ticketTypeId").GetGuid();
+        var message = IntegrationEventEnvelopeCodec.ReadPayload<AvailabilityChangedIntegrationEvent>(envelope);
+        var ticketTypeId = message.TicketTypeId;
 
         // Re-read the LIVE truth (background scope has no tenant -> IgnoreQueryFilters).
         var truth = await db.TicketTypes

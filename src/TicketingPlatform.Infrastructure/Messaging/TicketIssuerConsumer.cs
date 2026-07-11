@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,6 +7,7 @@ using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
@@ -95,7 +94,8 @@ public sealed class TicketIssuerConsumer : BackgroundService
 
     private async Task HandleAsync(BasicDeliverEventArgs ea, CancellationToken ct)
     {
-        var messageId = Guid.Parse(ea.BasicProperties.MessageId!);
+        var envelope = IntegrationEventEnvelopeCodec.Read(ea);
+        var messageId = envelope.MessageId;
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
@@ -104,8 +104,8 @@ public sealed class TicketIssuerConsumer : BackgroundService
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
             return;
 
-        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
-        var orderId = payload.RootElement.GetProperty("orderId").GetGuid();
+        var message = IntegrationEventEnvelopeCodec.ReadPayload<OrderConfirmedIntegrationEvent>(envelope);
+        var orderId = message.OrderId;
 
         if (await db.Tickets.IgnoreQueryFilters().AnyAsync(t => t.OrderId == orderId, ct))
         {

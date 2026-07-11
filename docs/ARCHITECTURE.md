@@ -110,7 +110,12 @@ Restraint is the senior signal. Splitting to fix messy code produces distributed
   be atomic across Postgres and RabbitMQ. The event is written to an outbox table in the same
   transaction as the state change; a dispatcher publishes it afterward. At-least-once by
   construction, so every consumer dedupes by message id (per-consumer, for fan-out safety) and
-  poison messages dead-letter instead of looping.
+  poison messages dead-letter instead of looping. Producers use typed `IIntegrationEvent`
+  records, not event-name strings and anonymous objects. RabbitMQ bodies use a versioned envelope
+  (`messageId`, `eventType`, `schemaVersion`, `occurredAt`, `tenantId`, `correlationId`, `payload`),
+  and consumers reject identity/routing/version mismatches before side effects. Publisher confirms,
+  mandatory routing, persistent retry scheduling, per-consumer TTL retry queues, and an attempt
+  cap close the common broker loss and hot-loop windows.
 
 - **CQRS read model for availability.** Browse reads hit a denormalized `EventAvailabilityView`
   maintained by a projection consumer, never the contested `Inventories` row. Eventually
@@ -149,13 +154,13 @@ Restraint is the senior signal. Splitting to fix messy code produces distributed
 Many fast unit tests on domain/application logic (the state machine, reservation math,
 validators — no DB, no HTTP). Integration tests against **real** Postgres, Redis, and RabbitMQ
 via Testcontainers, driving the actual API through `WebApplicationFactory` and authenticating
-like a real client. `DbContext` is never mocked. The backend has 117 tests total. The frontend
+like a real client. `DbContext` is never mocked. The backend has 149 tests total. The frontend
 adds typecheck, lint, production build, npm audit, and a Playwright golden journey that seeds
 through the API and then drives the real browser flow.
 
 ## What was deliberately deferred (and why that is a feature)
 
-Reserved-seating maps, search at scale (Elasticsearch), and a virtual waiting room are scoped
+Reserved-seating maps and search at scale are scoped
 as design write-ups rather than half-built code. One finished, defensible system beats several
 abandoned ones — and knowing what to leave out is itself the judgment this project is meant to
 demonstrate.
