@@ -107,6 +107,36 @@ public sealed class OutboxDeliveryTests
         }
     }
 
+    [Fact]
+    public async Task Outbox_UnroutableMessage_IsQuarantinedWhenAttemptBudgetIsExhausted()
+    {
+        // One failed publish reaches the test factory's configured cap of two.
+        var probeId = await InsertProbeAsync(attempts: 1);
+
+        try
+        {
+            OutboxMessage? failed = null;
+            for (var i = 0; i < 20; i++)
+            {
+                await Task.Delay(500);
+                failed = await ReadAsync(probeId);
+                if (failed?.FailedAt is not null)
+                    break;
+            }
+
+            Assert.NotNull(failed);
+            Assert.NotNull(failed!.FailedAt);
+            Assert.Equal(2, failed.Attempts);
+            Assert.Null(failed.ProcessedAt);
+            Assert.Null(failed.NextAttemptAt);
+            Assert.False(string.IsNullOrWhiteSpace(failed.LastError));
+        }
+        finally
+        {
+            await DeleteAsync(probeId);
+        }
+    }
+
     private async Task<Guid> InsertProbeAsync(int attempts = 0)
     {
         var probeId = Guid.NewGuid();

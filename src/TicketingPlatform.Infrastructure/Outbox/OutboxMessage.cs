@@ -24,6 +24,15 @@ public class OutboxMessage
     public DateTimeOffset? LockedUntil { get; set; }
     public string? LockedBy { get; set; }
 
+    /// <summary>Earliest time the dispatcher may retry this row after a failed publication.</summary>
+    public DateTimeOffset? NextAttemptAt { get; set; }
+
+    /// <summary>Set when the configured publish-attempt budget is exhausted.</summary>
+    public DateTimeOffset? FailedAt { get; set; }
+
+    /// <summary>Last broker failure retained for operator diagnosis; never contains the payload.</summary>
+    public string? LastError { get; set; }
+
     /// <summary>
     /// W3C traceparent of the request that produced this event. The dispatcher polls outside
     /// any request context, so without this column the trace would end at the outbox write.

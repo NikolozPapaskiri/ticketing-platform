@@ -32,6 +32,7 @@ public sealed class OutboxDispatcher : BackgroundService
     private IConnection? _connection;
     private IChannel? _channel;
     private readonly string _workerId = $"{Environment.MachineName}:{Guid.NewGuid():N}";
+    private int MaxAttempts => Math.Max(1, _options.OutboxMaxAttempts);
 
     public OutboxDispatcher(IServiceScopeFactory scopes, IOptions<RabbitMqOptions> options, ILogger<OutboxDispatcher> logger)
     {
@@ -113,18 +114,37 @@ public sealed class OutboxDispatcher : BackgroundService
                 message.Attempts++;
                 message.LockedBy = null;
                 message.LockedUntil = null;
+                message.NextAttemptAt = null;
+                message.LastError = null;
                 confirmed++;
             }
             catch (PublishException ex)
             {
-                // Unroutable (no binding) or nacked by the broker: leave the row UNPROCESSED and
-                // release its claim so it is retried. A returned message means a real topology gap
-                // - visible and recoverable, never a silent loss.
+                // Unroutable (no binding) or nacked by the broker: leave the row UNPROCESSED.
+                // Schedule retries so a permanent topology defect cannot create a one-second hot
+                // loop. Exhausted rows are quarantined for operator diagnosis and explicit replay.
+                var failedAt = DateTimeOffset.UtcNow;
                 message.Attempts++;
                 message.LockedBy = null;
                 message.LockedUntil = null;
-                _logger.LogWarning(ex, "Outbox message {MessageId} ({Type}) was not confirmed (returned={Returned}); left for retry",
-                    message.Id, message.Type, ex.IsReturn);
+                message.LastError = Truncate(ex.Message, 2000);
+
+                if (message.Attempts >= MaxAttempts)
+                {
+                    message.FailedAt = failedAt;
+                    message.NextAttemptAt = null;
+                    _logger.LogError(ex,
+                        "Outbox message {MessageId} ({Type}) exhausted {Attempts} publish attempts and was quarantined",
+                        message.Id, message.Type, message.Attempts);
+                }
+                else
+                {
+                    message.NextAttemptAt = failedAt.Add(CalculateRetryDelay(message.Attempts));
+                    _logger.LogWarning(ex,
+                        "Outbox message {MessageId} ({Type}) was not confirmed (returned={Returned}); retry {Attempt}/{MaxAttempts} after {NextAttemptAt}",
+                        message.Id, message.Type, ex.IsReturn, message.Attempts,
+                        MaxAttempts, message.NextAttemptAt);
+                }
             }
         }
 
@@ -138,6 +158,7 @@ public sealed class OutboxDispatcher : BackgroundService
         TicketingDbContext db, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
+        var maxAttempts = MaxAttempts;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var batch = await db.OutboxMessages
@@ -146,6 +167,9 @@ public sealed class OutboxDispatcher : BackgroundService
                 WHERE "Id" IN (
                     SELECT "Id" FROM "OutboxMessages"
                     WHERE "ProcessedAt" IS NULL
+                      AND "FailedAt" IS NULL
+                      AND "Attempts" < {maxAttempts}
+                      AND ("NextAttemptAt" IS NULL OR "NextAttemptAt" <= {now})
                       AND ("LockedUntil" IS NULL OR "LockedUntil" <= {now})
                     ORDER BY "OccurredAt"
                     LIMIT {BatchSize}
@@ -165,6 +189,18 @@ public sealed class OutboxDispatcher : BackgroundService
         await tx.CommitAsync(ct);
         return batch;
     }
+
+    private TimeSpan CalculateRetryDelay(int attempts)
+    {
+        var baseSeconds = Math.Max(1, _options.OutboxRetryBaseSeconds);
+        var exponent = Math.Min(Math.Max(0, attempts - 1), 10);
+        var exponentialSeconds = Math.Min(baseSeconds * Math.Pow(2, exponent), 3600);
+        var jitter = 0.8 + Random.Shared.NextDouble() * 0.4;
+        return TimeSpan.FromSeconds(exponentialSeconds * jitter);
+    }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength];
 
     private async Task<IChannel> EnsureChannelAsync(CancellationToken ct)
     {

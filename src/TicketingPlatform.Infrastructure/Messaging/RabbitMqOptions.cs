@@ -14,4 +14,10 @@ public sealed class RabbitMqOptions
 
     /// <summary>Where poison messages are parked instead of looping forever.</summary>
     public string DeadLetterExchange { get; init; } = "ticketing-dlx";
+
+    /// <summary>Initial delay before retrying a publish rejected or returned by RabbitMQ.</summary>
+    public int OutboxRetryBaseSeconds { get; init; } = 5;
+
+    /// <summary>Maximum publish attempts before the row is quarantined for operator action.</summary>
+    public int OutboxMaxAttempts { get; init; } = 10;
 }
