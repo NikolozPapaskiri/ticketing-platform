@@ -597,17 +597,24 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- The production safety hardening plan (**PR 1-6**) is **COMPLETE**. Optional follow-ups noted in
-  `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`: a distributed login limiter, and an HMAC-signed
-  join-token + join challenge for waiting-room queue integrity. Mock-interview reps follow the safety
-  gates. Reserved seating and Elasticsearch remain paused.
+- The production safety hardening plan (**PR 1-6**) is **IMPLEMENTED and pushed** (branches
+  unmerged). Deferred optional follow-ups noted in the plan: a distributed login limiter, and an
+  HMAC-signed join-token + join challenge for waiting-room queue integrity. Reserved seating and
+  Elasticsearch remain paused.
+- **KNOWN ISSUE — PR 6 §6.5 CI is red on the real runner** (it was only YAML-validated): (1) `images`
+  job pins `aquasecurity/trivy-action@0.28.0` — not a published tag, use a valid release; (2) `e2e`
+  job (Playwright vs the compose stack, first run) exits 1 — needs the "Run Playwright"/`docker
+  compose logs` output to diagnose (likely the S3/MinIO-backed api not healthy in time, the golden
+  journey failing headless, or Playwright install). Node-20 deprecation lines are non-fatal warnings.
+  Must fix before merging PR 6 / observability.
 - **Observability** (`docs/OBSERVABILITY_PLAN.md`): app exports metrics + traces + **logs** over
   OTLP (role-aware service name). `docker-compose.observability.yml` overlays OTel Collector ->
   Prometheus/Loki/Tempo -> **Grafana** (provisioned datasources + "Ticketing — Overview" dashboard),
   plus postgres/redis/RabbitMQ/MinIO exporters. In-app **`/admin/ops`** page + `GET /api/v1/admin/ops`
   (PlatformAdmin) render a source-of-truth snapshot (health + backlogs), accurate in any topology
-  since it doesn't read the worker-populated gauges. Outstanding P5: alert rules + k8s monitoring
-  overlay + more dashboards. 200 tests (78 unit + 122 integration).
+  since it doesn't read the worker-populated gauges. 200 tests (78 unit + 122 integration).
+  Outstanding: P5 (alert rules + k8s monitoring overlay + more dashboards) + an end-to-end runtime
+  check that data reaches Grafana (stack configs are binary-validated but the full stack wasn't run).
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

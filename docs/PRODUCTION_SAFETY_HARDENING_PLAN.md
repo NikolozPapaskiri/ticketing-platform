@@ -703,7 +703,19 @@ has-pending-model-changes`. Dependabot automates dependency updates across NuGet
 
 **197 tests green (78 unit + 119 integration)** against real PostgreSQL/Redis/RabbitMQ/MinIO; Release
 build 0 warnings; migration parity clean; k8s manifests render. This completes the production safety
-hardening plan.
+hardening plan's implementation.
+
+**Known follow-ups — the §6.5 CI was YAML-validated but not run until the PR opened, and its two new
+jobs fail on the real runner (fix before merge):**
+
+1. `images` job — `aquasecurity/trivy-action@0.28.0` is not a published tag; pin a valid release
+   (a current `0.2x`/`0.3x` tag, or the major/`master` pin).
+2. `e2e` job — the first real run of "Playwright vs the compose stack" exits 1 (~2m in). Needs the
+   "Run Playwright" step log (and `docker compose logs`) to pinpoint; likely candidates: the
+   S3/MinIO-backed api not becoming healthy before the web app, the golden journey not passing
+   headless in CI, or Playwright browser/deps install.
+3. Minor: `checkout@v4` / `setup-node@v4` / `setup-dotnet@v4` emit Node-20 deprecation **warnings**
+   (not failures) - bump when convenient.
 
 Suggested branch: `feature/production-operations`
 

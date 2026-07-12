@@ -6,6 +6,20 @@ Created: 2026-07-13
 Builds on: the `TicketingPlatform` OpenTelemetry meter, the `/health/detail` endpoint, and the
 distributed tracing already wired for HTTP in/out, Npgsql SQL, and the RabbitMQ hop.
 
+## Known gaps / next
+
+- **P5 outstanding:** alert rules (Grafana Alerting / Alertmanager), a k8s `monitoring` overlay, and
+  the remaining curated dashboards (only "Ticketing — Overview" exists; checkout, messaging,
+  runtime/infra, and business-KPI dashboards are still to author).
+- **Not yet runtime-proven end to end:** the stack configs are validated against the real
+  collector/Prometheus/Loki/Tempo binaries and the merged compose is valid, but the full 12-container
+  stack has not been brought up with live traffic - so "data actually populating the Grafana panels"
+  is unconfirmed. The overview dashboard's metric names assume `add_metric_suffixes: false` on the
+  collector's Prometheus exporter and may need a panel tweak once real series are visible.
+- **Branch CI is red** because it is stacked on `feature/production-operations`, whose §6.5 CI has two
+  failing jobs (Trivy action version, e2e first run) - see `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`.
+  Those must be fixed for this PR to go green; nothing in the observability code itself is implicated.
+
 ## Objective
 
 The app already *emits* metrics and traces over OTLP, but nothing collects or displays them. Give

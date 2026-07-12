@@ -567,15 +567,21 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- The production safety hardening plan (PR 1-6) is COMPLETE. Open follow-ups if desired: a
-  distributed login limiter, and the HMAC-signed join-token + join challenge for waiting-room queue
-  integrity (both noted in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`). Mock-interview reps follow
-  the safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- The production safety hardening plan (PR 1-6) is IMPLEMENTED and pushed (branches unmerged).
+  Deferred optional follow-ups: a distributed login limiter, and the HMAC-signed join-token + join
+  challenge for waiting-room queue integrity (both noted in the plan). Reserved seating and
+  Elasticsearch remain optional and paused.
+- KNOWN ISSUE - PR 6's §6.5 CI fails on the real runner (it was only YAML-validated): (1) `images`
+  job pins `aquasecurity/trivy-action@0.28.0`, not a real tag -> use a valid release; (2) `e2e` job
+  (Playwright vs the compose stack, first run) exits 1 -> needs the "Run Playwright"/`docker compose
+  logs` output to diagnose; (3) Node-20 deprecation warnings on the actions are non-fatal. Fix before
+  merging PR 6 / observability. Details in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`.
 - Observability (`docs/OBSERVABILITY_PLAN.md`): the app exports metrics + traces + logs over OTLP;
   `docker-compose.observability.yml` overlays an OTel Collector -> Prometheus/Loki/Tempo -> Grafana
   stack (+ postgres/redis/RabbitMQ/MinIO exporters, provisioned overview dashboard). An in-app
   PlatformAdmin ops page (`/admin/ops` + `GET /api/v1/admin/ops`) shows a source-of-truth snapshot.
-  Outstanding (P5): alert rules + a k8s monitoring overlay + more curated dashboards.
+  Outstanding: P5 (alert rules + k8s monitoring overlay + more dashboards) and an end-to-end runtime
+  check that data reaches Grafana (configs are binary-validated but the full stack wasn't run).
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.
