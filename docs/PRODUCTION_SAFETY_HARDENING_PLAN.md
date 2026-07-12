@@ -705,17 +705,18 @@ has-pending-model-changes`. Dependabot automates dependency updates across NuGet
 build 0 warnings; migration parity clean; k8s manifests render. This completes the production safety
 hardening plan's implementation.
 
-**Known follow-ups — the §6.5 CI was YAML-validated but not run until the PR opened, and its two new
-jobs fail on the real runner (fix before merge):**
+**§6.5 CI — the workflow was YAML-validated but not run until the PR opened, which exposed two real
+failures (both now FIXED):**
 
-1. `images` job — `aquasecurity/trivy-action@0.28.0` is not a published tag; pin a valid release
-   (a current `0.2x`/`0.3x` tag, or the major/`master` pin).
-2. `e2e` job — the first real run of "Playwright vs the compose stack" exits 1 (~2m in). Needs the
-   "Run Playwright" step log (and `docker compose logs`) to pinpoint; likely candidates: the
-   S3/MinIO-backed api not becoming healthy before the web app, the golden journey not passing
-   headless in CI, or Playwright browser/deps install.
-3. Minor: `checkout@v4` / `setup-node@v4` / `setup-dotnet@v4` emit Node-20 deprecation **warnings**
-   (not failures) - bump when convenient.
+1. ✅ `images` job — `aquasecurity/trivy-action@0.28.0` was never a published tag (repin to `0.35.0`).
+2. ✅ `e2e` job — the API crashed on startup in-container: `appsettings.Development`'s relative
+   `DataProtection:KeysPath` (`.aspnet/DataProtection-Keys`) resolved under the root-owned `/app`, so
+   the non-root user couldn't create it. The web came up and its redirect test passed, but every test
+   that hit the API (the seed step) failed. Fixed by pointing the keys at the writable
+   `/var/ticketing/keys` via a Dockerfile env. Reproduced locally against the full compose stack: all
+   four golden-journey tests pass, including the S3/MinIO ticket download.
+3. Minor (still open): `checkout@v4` / `setup-node@v4` / `setup-dotnet@v4` emit Node-20 deprecation
+   **warnings** (not failures) — bump when convenient.
 
 Suggested branch: `feature/production-operations`
 

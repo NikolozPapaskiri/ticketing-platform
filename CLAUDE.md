@@ -601,12 +601,13 @@ This block supersedes older phase-progress lines above if they disagree.
   unmerged). Deferred optional follow-ups noted in the plan: a distributed login limiter, and an
   HMAC-signed join-token + join challenge for waiting-room queue integrity. Reserved seating and
   Elasticsearch remain paused.
-- **KNOWN ISSUE — PR 6 §6.5 CI is red on the real runner** (it was only YAML-validated): (1) `images`
-  job pins `aquasecurity/trivy-action@0.28.0` — not a published tag, use a valid release; (2) `e2e`
-  job (Playwright vs the compose stack, first run) exits 1 — needs the "Run Playwright"/`docker
-  compose logs` output to diagnose (likely the S3/MinIO-backed api not healthy in time, the golden
-  journey failing headless, or Playwright install). Node-20 deprecation lines are non-fatal warnings.
-  Must fix before merging PR 6 / observability.
+- **PR 6 §6.5 CI** (only YAML-validated at authoring) had two real failures on first run, **now
+  fixed**: (1) `images` pinned `trivy-action@0.28.0` (nonexistent tag) → `0.35.0`; (2) `e2e` crashed
+  because the container API's relative `DataProtection:KeysPath` (`.aspnet/...` from
+  appsettings.Development) resolved under root-owned `/app` and the non-root user couldn't create it →
+  point it at the writable `/var/ticketing/keys` via a Dockerfile env. Reproduced + verified locally:
+  the full compose stack boots and all 4 golden-journey tests pass (incl. the S3/MinIO ticket
+  download). Still open (non-fatal): Node-20 deprecation warnings on the actions.
 - **Observability** (`docs/OBSERVABILITY_PLAN.md`): app exports metrics + traces + **logs** over
   OTLP (role-aware service name). `docker-compose.observability.yml` overlays OTel Collector ->
   Prometheus/Loki/Tempo -> **Grafana** (provisioned datasources + "Ticketing — Overview" dashboard),
