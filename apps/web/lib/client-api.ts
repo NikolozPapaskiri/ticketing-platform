@@ -11,7 +11,8 @@ import type {
   TicketAvailability,
   TicketType,
   TicketValidation,
-  User
+  User,
+  OpsSnapshot
 } from "@/lib/types";
 
 export class ApiClientError extends Error {
@@ -238,4 +239,8 @@ export function createTenant(input: { name: string; slug: string }) {
 
 export function registerStaff(input: { email: string; password: string; role: "OrganizerStaff" | "PlatformAdmin"; tenantId: string | null }) {
   return bff<User>("/auth/register-staff", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function getOpsSnapshot() {
+  return bff<OpsSnapshot>("/admin/ops");
 }

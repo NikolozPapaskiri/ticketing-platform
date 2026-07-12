@@ -134,6 +134,7 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<OrderService>();
 builder.Services.AddScoped<TicketService>();
 builder.Services.AddScoped<WaitingRoomService>();
+builder.Services.AddScoped<TicketingPlatform.Api.Features.Ops.OpsSnapshotService>();
 
 // Hold TTL / expiry-scan settings (plain singleton so Application stays free of IOptions).
 builder.Services.AddSingleton(

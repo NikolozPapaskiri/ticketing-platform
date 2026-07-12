@@ -28,6 +28,9 @@ public interface IWaitingRoom
 
     /// <summary>Throttle anonymous queue joins per client so nobody mints unlimited positions.</summary>
     Task<bool> TryRegisterJoinAsync(string clientKey, CancellationToken ct);
+
+    /// <summary>Total visitors queued across every active event - the ops snapshot's queue-depth gauge.</summary>
+    Task<long> GetTotalWaitingAsync(CancellationToken ct);
 }
 
 /// <summary>Position is 1-based; 0 when admitted (no longer in line).</summary>
