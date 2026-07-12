@@ -377,8 +377,7 @@ Required tests for every reservation strategy:
 
 ## PR 3: RabbitMQ publication and consumer reliability
 
-**Status: IN PROGRESS — publication, retry, and versioned contracts are DONE** on branch
-`feature/rabbitmq-delivery-safety`: a `RabbitMqTopologyInitializer` declares the exchange, DLX,
+**Status: DONE** on branch `feature/rabbitmq-delivery-safety`: a `RabbitMqTopologyInitializer` declares the exchange, DLX,
 and every consumer queue + binding as a plain `IHostedService` whose `StartAsync` completes
 BEFORE the dispatcher starts (§3.1), and the dispatcher now publishes with **publisher confirms +
 tracking** and `mandatory: true`, marking a row processed only after the broker ACKs and leaving a
@@ -403,8 +402,17 @@ trace metadata. The dispatcher wraps the typed payload in a stable envelope cont
 Consumers verify that envelope identity matches AMQP `MessageId` and the routing key before they
 deserialize a typed payload or perform a side effect. Unsupported versions and invalid contracts
 are poison; old pending outbox rows remain publishable because tenant metadata can be recovered
-from the legacy payload. 149 backend tests are green (60 unit + 89 integration) against real
-PostgreSQL, Redis, and RabbitMQ.
+from the legacy payload.
+
+The gate is now fully met (§3.5, §3.6): `Topology_IsReadyBeforeFirstPublish` passive-declares
+every exchange, main queue, retry queue, and the DLQ (the initializer ran before dispatch);
+`TicketIssuer_DuplicateConcurrentDelivery_ProducesMatchingFileAndDatabaseCode` proves duplicate
+`OrderConfirmed` delivery leaves exactly one ticket row and one matching PDF credential; and the
+messaging path is observable — outbox backlog age (gauge), returned/retried/quarantined counters,
+confirmation-latency histogram, and consumer retry/dead-letter counters, all on the exported
+`TicketingPlatform` meter. **153 backend tests green (60 unit + 93 integration)** against real
+PostgreSQL, Redis, and RabbitMQ; Release build 0 warnings. Next: PR 4 (waiting-room atomicity and
+global admission control).
 
 The dispatcher’s broker transport is isolated behind `IOutboxPublisher`. A deterministic test
 injects one pre-confirm transport loss, proves the claimed row remains unprocessed with its same
