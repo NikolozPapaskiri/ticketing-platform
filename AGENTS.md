@@ -536,10 +536,19 @@ This block supersedes older phase-progress lines above if they disagree.
   TryConsumeAdmissionAsync verifies event-binding, binds the customer on first use (leaked GUID ->
   403), and decrements quota (-> 429); anonymous joins are per-client fixed-window throttled.
   §4.5 gate met. Tests: expired-grant, wrong-event, over-quota, customer-binding, join-throttle.
-- Current verification: 161 backend tests (60 unit + 101 integration, incl. 14 waiting-room, 6
-  payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and
-  13 messaging tests: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-
-  envelope/consumer-retry/poison/topology-readiness/duplicate-ticket),
+- Session safety (PR 5) is DONE: refresh tokens are family-scoped; rotation is an atomic
+  compare-and-swap (`TryRotateAsync`: conditional UPDATE ... WHERE RevokedAt IS NULL + successor
+  insert in one tx), and a rotated-token replay WITHIN a configurable grace window is a legitimate
+  concurrent refresh (sibling in the same family), OUTSIDE it revokes only that family. Reads are
+  AsNoTracking so the post-claim re-read is fresh. Server-side logout (`POST /auth/logout` revokes
+  the family; BFF calls it before clearing cookies) + BFF single-flight. Proxy-aware rate limiting
+  (ForwardedHeaders honoured only from configured trusted proxies, else X-Forwarded-For ignored).
+  Startup validation rejects weak/dev/short JWT keys. Migration `AddRefreshTokenFamily`.
+- Current verification: 176 backend tests (68 unit + 108 integration, incl. 7 session/proxy: 5
+  session-safety + 2 proxy-rate-limit, 14 waiting-room, 6 payment-race/reconciliation, 5
+  refund/scan/release across all three reservation strategies, and 13 messaging tests: unroutable/
+  backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/consumer-retry/poison/
+  topology-readiness/duplicate-ticket),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
@@ -549,9 +558,9 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- Immediate planned work: PR 5 (auth session concurrency + proxy-aware rate limiting) and PR 6
-  (deployment/storage/health/ops) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview
-  reps follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- Immediate planned work: PR 6 (deployment/storage/health/ops incl. separate API/worker hosts and a
+  distributed login limiter) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview reps
+  follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

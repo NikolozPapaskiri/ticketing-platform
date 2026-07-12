@@ -609,6 +609,43 @@ into a dedicated anti-abuse PR when the marketplace threat model justifies the a
 
 ## PR 5: Authentication session concurrency and proxy-aware rate limiting
 
+**Status: DONE** on branch `feature/session-safety`. Refresh tokens are now **family-scoped** (one
+login = one family). Rotation is an atomic compare-and-swap - a conditional
+`UPDATE ... WHERE RevokedAt IS NULL` inside the same transaction that inserts the successor
+(`IRefreshTokenRepository.TryRotateAsync`) - so parallel refreshes can neither fork the session nor
+mint two successors. The single caller that wins the claim gets the new pair; a caller that finds
+the token already rotated **within a short, configurable grace window**
+(`Auth:RefreshRotationGraceSeconds`, default 5s) is treated as a legitimate concurrent /
+near-concurrent refresh and gets a sibling in the same family, **not** a theft signal. A rotated
+token replayed **outside** the window still revokes the whole family - but only THAT family, so a
+compromise or sign-out on one device leaves the user's other devices alone (the old code revoked
+every token the user owned). Reads are `AsNoTracking`, so the post-claim re-read reflects the
+concurrent rotation rather than a stale identity-map row (the bug that first made the concurrency
+test flake). The BFF also **single-flights** refreshes per replica so a burst rotates once; the
+server-side grace window covers the residual cross-replica race.
+
+**Logout is server-side**: `POST /auth/logout` revokes the token's family, and the BFF calls it
+before clearing cookies, so a leaked refresh cookie is dead after sign-out (previously logout only
+cleared local cookies). It always returns 204 (idempotent, no token-validity oracle).
+
+**Rate limiting is proxy-aware**: with a trusted proxy configured (`ReverseProxy` section),
+`UseForwardedHeaders` rewrites the client IP from `X-Forwarded-For` **only** when the immediate peer
+is a configured proxy/network, before the limiter partitions on it; with nothing configured the
+header is ignored so it cannot be forged to dodge or poison the per-IP window. The default-trust
+loopback lists are cleared and replaced with only the configured proxies. (Login limits stay
+per-instance for now - a fixed-window-per-IP guard in front of PBKDF2; a distributed limiter is
+deferred to §6 with the other multi-replica ops concerns.)
+
+**Security-sensitive options are validated at startup** (`SecurityOptionsValidation.ValidateJwt`):
+a missing/short (<32-byte) signing key, a leftover `DEV-ONLY` key in a non-Development environment,
+or a non-positive access-token lifetime fails the process fast instead of minting
+forgeable-in-practice tokens.
+
+Migration `AddRefreshTokenFamily` adds `FamilyId` (backfilled per existing row via
+`gen_random_uuid()` so an upgrade doesn't lump every legacy session into one family). **176 tests
+green (68 unit + 108 integration)** against real PostgreSQL/Redis/RabbitMQ; Release build 0
+warnings; `has-pending-model-changes` clean. Next: PR 6 (deployment/storage/health/ops).
+
 Suggested branch: `feature/session-safety`
 
 ### Scope

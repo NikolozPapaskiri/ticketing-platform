@@ -524,8 +524,9 @@ This block supersedes older phase-progress lines above if they disagree.
   `xmin` blocks double-finalize; `IPaymentGateway.GetChargeStatusAsync` + `PaymentReconciliation
   Service` settle orphaned leases (multi-replica-safe via the tokens). `AddDurablePaymentState`
   migration. Deterministic race harness in tests (`AsyncGate`, `ControllablePaymentGateway`,
-  `FaultInterceptor`). **Still open from the plan: PR 2 (atomic refund/scan/release), PR 3
-  (RabbitMQ publisher confirms + topology), PR 4 (waiting-room Lua/token-bucket), PR 5 (prod ops).**
+  `FaultInterceptor`). **Follow-on plan PRs: PR 2 (atomic refund/scan/release), PR 3 (RabbitMQ
+  publisher confirms + topology), PR 4 (waiting-room Lua/token-bucket), PR 5 (session safety) — all
+  done; PR 6 (prod ops) remains.**
 - **Atomic post-payment transitions (hardening plan PR 2) is done.** Refund claims
   `Confirmed → RefundPending` (order `xmin`) with a stable `refund:{orderId}` key so customer +
   staff can't double-refund; ticket scan is an `xmin` compare-and-swap (`Issued → Scanned`, one
@@ -554,11 +555,25 @@ This block supersedes older phase-progress lines above if they disagree.
   the authenticated customer on first use (leaked GUID → 403), and decrements the hold quota
   (exhausted → 429). Anonymous joins are per-client (IP) fixed-window throttled (→ 429). §4.5 gate
   met (atomic, rate replica-independent, leaked GUID insufficient, abuse bounded, poll+SignalR ok).
-- Current verification: 161 backend tests (60 unit + 101 integration, incl. 14 waiting-room, 6
-  payment-race/reconciliation, 5 refund/scan/release across all strategies, and the messaging
-  suite: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/
-  consumer-retry/poison/topology-readiness/duplicate-ticket), plus frontend typecheck, lint,
-  production build, Playwright e2e (4), and live smoke.
+- **Session safety (hardening plan PR 5) — DONE.** Refresh tokens are **family-scoped** (one login
+  = one family). Rotation is an atomic CAS — `TryRotateAsync` runs a conditional
+  `UPDATE ... WHERE RevokedAt IS NULL` and inserts the successor in the same tx, so parallel
+  refreshes can't fork the session or mint two successors. A rotated-token replay **within** a
+  configurable grace window (`Auth:RefreshRotationGraceSeconds`, default 5s) is a legitimate
+  concurrent refresh (sibling in the same family); **outside** it revokes only that family (not the
+  user's other devices). Reads are `AsNoTracking` so the post-claim re-read is fresh (fixed the
+  stale-identity-map bug the concurrency test caught). Server-side logout (`POST /auth/logout`
+  revokes the family; the BFF calls it before clearing cookies) + BFF per-replica single-flight.
+  **Proxy-aware rate limiting**: `UseForwardedHeaders` honours `X-Forwarded-For` only from
+  configured trusted proxies (`ReverseProxy` section), else ignores it. Startup validation
+  (`SecurityOptionsValidation`) rejects a missing/short/`DEV-ONLY` JWT key. Migration
+  `AddRefreshTokenFamily`.
+- Current verification: 176 backend tests (68 unit + 108 integration, incl. 7 session/proxy: 5
+  session-safety + 2 proxy-rate-limit, 14 waiting-room, 6 payment-race/reconciliation, 5
+  refund/scan/release across all strategies, and the messaging suite: unroutable/backoff/quarantine/
+  broker-disconnect/crash-redeliver/versioned-envelope/consumer-retry/poison/topology-readiness/
+  duplicate-ticket), plus frontend typecheck, lint, production build, Playwright e2e (4), and live
+  smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
@@ -570,9 +585,10 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Immediate planned work: **PR 5** (auth session concurrency + proxy-aware rate limiting) and
-  **PR 6** (deployment/storage/health/ops) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`.
-  Mock-interview reps follow the safety gates. Reserved seating and Elasticsearch remain paused.
+- Immediate planned work: **PR 6** (deployment/storage/health/ops — separate API/worker hosts,
+  readiness semantics, shared object storage, a distributed login limiter, retention jobs) in
+  `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview reps follow the safety gates. Reserved
+  seating and Elasticsearch remain paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.
