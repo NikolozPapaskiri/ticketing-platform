@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # App metrics (custom TicketingPlatform meter + ASP.NET Core / HttpClient / .NET runtime),
+  # re-exposed by the collector.
+  - job_name: ticketing-app
+    static_configs:
+      - targets: ['otel-collector:8889']
+
+  # Infrastructure exporters.
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: redis
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ['rabbitmq:15692']   # built-in rabbitmq_prometheus plugin
+
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ['minio:9000']

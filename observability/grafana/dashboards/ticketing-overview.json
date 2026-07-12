@@ -1,0 +1,84 @@
+{
+  "uid": "ticketing-overview",
+  "title": "Ticketing — Overview",
+  "tags": ["ticketing"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Waiting room depth",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(ticketing_waiting_room_depth)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Payments awaiting reconciliation",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum(ticketing_payments_reconciliation_backlog)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Refunds pending reconciliation",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum(ticketing_refunds_reconciliation_backlog)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Order outcomes (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ticketing_orders_confirmed[5m]))", "legendFormat": "confirmed", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "sum(rate(ticketing_orders_payment_declined[5m]))", "legendFormat": "declined", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "C", "expr": "sum(rate(ticketing_orders_payment_unavailable[5m]))", "legendFormat": "unavailable", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "D", "expr": "sum(rate(ticketing_orders_refunded[5m]))", "legendFormat": "refunded", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Waiting-room admission rate (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_waiting_room_admitted[1m]))", "legendFormat": "admitted/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 6, "type": "stat", "title": "Outbox backlog age (ms)",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(ticketing_outbox_backlog_age)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 7, "type": "stat", "title": "Hold expiry lag (ms)",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(ticketing_holds_expiry_lag)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Dead-lettered messages (per sec)",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_consumer_dead_lettered[5m]))", "legendFormat": "dead-lettered/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Outbox: returned / retried / quarantined (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ticketing_outbox_publish_returned[5m]))", "legendFormat": "returned", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "sum(rate(ticketing_outbox_retried[5m]))", "legendFormat": "retried", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "C", "expr": "sum(rate(ticketing_outbox_quarantined[5m]))", "legendFormat": "quarantined", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Ticket scan conflicts (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_tickets_scan_conflicts[5m]))", "legendFormat": "conflicts/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    }
+  ]
+}

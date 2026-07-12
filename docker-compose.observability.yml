@@ -1,0 +1,105 @@
+# Observability overlay: the full metrics/logs/traces stack plus the exporters, and the app pointed
+# at the collector. Layer it on top of the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+#
+# Grafana: http://localhost:3001 (anonymous viewer; admin/admin to edit). Prometheus :9090.
+services:
+  api:
+    environment:
+      Otlp__Endpoint: http://otel-collector:4317
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  minio:
+    environment:
+      MINIO_PROMETHEUS_AUTH_TYPE: public   # expose /minio/v2/metrics without a token
+
+  rabbitmq:
+    volumes:
+      - ./observability/rabbitmq-enabled-plugins:/etc/rabbitmq/enabled_plugins:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: ticketing-otel-collector
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ticketing-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - postgres-exporter
+      - redis-exporter
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: ticketing-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempodata:/var/tempo
+    ports:
+      - "3200:3200"
+
+  loki:
+    image: grafana/loki:latest
+    container_name: ticketing-loki
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - lokidata:/loki
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ticketing-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: ticketing-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://ticketing:ticketing@postgres:5432/ticketing?sslmode=disable"
+    depends_on:
+      - postgres
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: ticketing-redis-exporter
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      - redis
+
+volumes:
+  tempodata:
+  lokidata:

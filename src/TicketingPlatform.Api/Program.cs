@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -232,11 +233,13 @@ builder.Services.AddRateLimiter(options =>
 });
 
 // --- OpenTelemetry: traces (HTTP in, HTTP out, Npgsql SQL, and the custom messaging source
-// that carries traces across the RabbitMQ hop) + metrics. Exported over OTLP when
-// Otlp:Endpoint is configured (Jaeger/Grafana etc.); otherwise instrumentation is on but quiet.
+// that carries traces across the RabbitMQ hop) + metrics + logs. All three are exported over OTLP
+// when Otlp:Endpoint is configured (the observability stack's collector); otherwise instrumentation
+// is on but quiet. The service name is role-aware so the API and worker are distinguishable.
 var otlpEndpoint = builder.Configuration["Otlp:Endpoint"];
+var otelServiceName = hostRole == HostRole.Worker ? "ticketing-worker" : "ticketing-api";
 builder.Services.AddOpenTelemetry()
-    .ConfigureResource(resource => resource.AddService("ticketing-api"))
+    .ConfigureResource(resource => resource.AddService(otelServiceName))
     .WithTracing(tracing =>
     {
         tracing.AddAspNetCoreInstrumentation()
@@ -255,6 +258,17 @@ builder.Services.AddOpenTelemetry()
         if (otlpEndpoint is not null)
             metrics.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
     });
+
+// Structured logs go to Loki via the same OTLP pipeline, carrying the trace id so a log line links
+// straight to its trace.
+builder.Logging.AddOpenTelemetry(logging =>
+{
+    logging.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(otelServiceName));
+    logging.IncludeScopes = true;
+    logging.IncludeFormattedMessage = true;
+    if (otlpEndpoint is not null)
+        logging.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+});
 
 // --- Graceful shutdown: on SIGTERM (K8s pod termination) the host stops accepting requests,
 // then gives in-flight requests and the background services' stopping tokens this long to
