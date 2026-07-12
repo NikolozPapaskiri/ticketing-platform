@@ -1,6 +1,7 @@
 # Observability plan — a monitoring surface for everything
 
-Status: in progress
+Status: P1–P4 done (in-app ops page + metrics/logs/traces stack + infra exporters); P5 (alerting +
+k8s overlay) outstanding
 Created: 2026-07-13
 Builds on: the `TicketingPlatform` OpenTelemetry meter, the `/health/detail` endpoint, and the
 distributed tracing already wired for HTTP in/out, Npgsql SQL, and the RabbitMQ hop.
@@ -108,14 +109,14 @@ on-call staff.
 
 ## Rollout
 
-- **P1 — in-app ops page:** the `/api/v1/admin/ops` snapshot endpoint + the admin page. Smallest
-  self-contained increment; no new infra.
-- **P2 — make metrics visible:** OTel Collector + Prometheus + Grafana as a compose `observability`
-  profile; author dashboards 1–5 with provisioning.
-- **P3 — logs + traces:** add Loki + Tempo; ship logs via OTLP; wire trace exemplars.
-- **P4 — infra exporters:** postgres/redis exporters + enable the RabbitMQ/MinIO Prometheus
-  endpoints; dashboard 6.
-- **P5 — alerting + k8s:** alert rules + a k8s `monitoring` overlay; dashboards 7–8.
+- **P1 — in-app ops page:** ✅ `GET /api/v1/admin/ops` snapshot + the `/admin/ops` page.
+- **P2 — make metrics visible:** ✅ OTel Collector + Prometheus + Grafana in the
+  `docker-compose.observability.yml` overlay, with a provisioned "Ticketing — Overview" dashboard.
+- **P3 — logs + traces:** ✅ Loki + Tempo added; the app ships logs via OTLP (trace id attached).
+- **P4 — infra exporters:** ✅ postgres_exporter + redis_exporter + the RabbitMQ Prometheus plugin +
+  MinIO metrics, all scraped by Prometheus.
+- **P5 — alerting + k8s:** ⬜ alert rules + a k8s `monitoring` overlay + the remaining curated
+  dashboards (still to do).
 
 ## Cost
 

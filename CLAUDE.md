@@ -601,6 +601,13 @@ This block supersedes older phase-progress lines above if they disagree.
   `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`: a distributed login limiter, and an HMAC-signed
   join-token + join challenge for waiting-room queue integrity. Mock-interview reps follow the safety
   gates. Reserved seating and Elasticsearch remain paused.
+- **Observability** (`docs/OBSERVABILITY_PLAN.md`): app exports metrics + traces + **logs** over
+  OTLP (role-aware service name). `docker-compose.observability.yml` overlays OTel Collector ->
+  Prometheus/Loki/Tempo -> **Grafana** (provisioned datasources + "Ticketing — Overview" dashboard),
+  plus postgres/redis/RabbitMQ/MinIO exporters. In-app **`/admin/ops`** page + `GET /api/v1/admin/ops`
+  (PlatformAdmin) render a source-of-truth snapshot (health + backlogs), accurate in any topology
+  since it doesn't read the worker-populated gauges. Outstanding P5: alert rules + k8s monitoring
+  overlay + more dashboards. 200 tests (78 unit + 122 integration).
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

@@ -159,10 +159,22 @@ origin can break Next dev assets/HMR and make the UI look like it is cycling.
   Postgres, Redis, and RabbitMQ.
 - **Rate limiting:** fixed-window per client IP on the auth endpoints (429 before any password
   hashing runs); limit via `RateLimiting:AuthRequestsPerMinute`.
-- **OpenTelemetry:** traces (ASP.NET Core, HttpClient, Npgsql, and the custom messaging source)
-  + metrics. The outbox stores the W3C `traceparent`, the dispatcher stamps it into message
-  headers, and the consumer rejoins it — **one trace spans HTTP → outbox → RabbitMQ →
-  consumer**. Point `Otlp:Endpoint` at a collector (Jaeger, Grafana) to export.
+- **OpenTelemetry:** traces (ASP.NET Core, HttpClient, Npgsql, and the custom messaging source),
+  metrics (custom `TicketingPlatform` meter + runtime), and logs — all over OTLP. The outbox stores
+  the W3C `traceparent`, the dispatcher stamps it into message headers, and the consumer rejoins it
+  — **one trace spans HTTP → outbox → RabbitMQ → consumer**.
+- **Monitoring stack (metrics + logs + traces):** an optional overlay stands up an OpenTelemetry
+  Collector → Prometheus + Loki + Tempo → **Grafana** (with a provisioned overview dashboard) plus
+  postgres/redis/RabbitMQ/MinIO exporters:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+  # Grafana:    http://localhost:3001  (anonymous viewer; admin/admin to edit)
+  # Prometheus: http://localhost:9090
+  ```
+- **In-app ops page:** `/(admin)/ops` in the web UI (PlatformAdmin) — a curated at-a-glance snapshot
+  (dependency health, reconciliation/outbox/DLQ backlogs, waiting-room depth, orders by status) via
+  `GET /api/v1/admin/ops`, computed from the source of truth so it needs no Prometheus. Design in
+  [docs/OBSERVABILITY_PLAN.md](docs/OBSERVABILITY_PLAN.md).
 - **Graceful shutdown:** 30s drain on SIGTERM so in-flight sagas finish during rolling updates.
 - **CI:** GitHub Actions builds and runs all tests (Testcontainers works on the runners), then
   builds the image and pushes to GHCR from `main`.
