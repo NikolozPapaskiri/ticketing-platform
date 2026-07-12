@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import type { AuthResponse, User } from "@/lib/types";
-import { apiFetch, toBffResponse } from "@/lib/server/api";
-import { applyAuthCookies, clearAuthCookies, refreshCookieName } from "@/lib/server/auth";
+import type { User } from "@/lib/types";
+import { apiFetch } from "@/lib/server/api";
+import { applyAuthCookies, clearAuthCookies, refreshAccessToken, refreshCookieName } from "@/lib/server/auth";
 
 export async function POST() {
   const cookieStore = await cookies();
@@ -12,19 +12,14 @@ export async function POST() {
     return NextResponse.json({ title: "Authentication required" }, { status: 401 });
   }
 
-  const refreshResponse = await apiFetch("/api/v1/auth/refresh", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ refreshToken })
-  });
-
-  if (!refreshResponse.ok) {
-    const response = await toBffResponse(refreshResponse);
+  // Shared single-flight so parallel refreshes on this replica rotate once, not N times.
+  const auth = await refreshAccessToken(refreshToken);
+  if (!auth) {
+    const response = NextResponse.json({ title: "Authentication failed" }, { status: 401 });
     clearAuthCookies(response);
     return response;
   }
 
-  const auth = (await refreshResponse.json()) as AuthResponse;
   const meResponse = await apiFetch("/api/v1/auth/me", {
     headers: { Authorization: `Bearer ${auth.accessToken}` }
   });

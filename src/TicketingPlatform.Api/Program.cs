@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Threading.RateLimiting;
 using Asp.Versioning;
@@ -5,6 +6,7 @@ using Microsoft.AspNetCore.DataProtection;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
@@ -72,6 +74,9 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Missing 'Jwt' configuration section.");
 
+// Fail fast on a weak/missing/left-over-dev signing key rather than mint forgeable tokens.
+SecurityOptionsValidation.ValidateJwt(jwt, builder.Environment.IsDevelopment());
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -135,6 +140,11 @@ builder.Services.AddSingleton(
     builder.Configuration.GetSection(TicketingPlatform.Application.Common.WaitingRoomOptions.SectionName)
         .Get<TicketingPlatform.Application.Common.WaitingRoomOptions>() ?? new());
 
+// Refresh-session tuning (rotation grace window). Plain singleton, same as the options above.
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection(TicketingPlatform.Application.Common.AuthSessionOptions.SectionName)
+        .Get<TicketingPlatform.Application.Common.AuthSessionOptions>() ?? new());
+
 // SignalR with the Redis backplane: group membership and broadcasts flow through Redis, so a
 // message published from pod B reaches a client connected to pod A. Without the backplane,
 // live availability silently breaks the moment there is a second replica.
@@ -165,6 +175,27 @@ builder.Services.AddHealthChecks()
     .AddDbContextCheck<TicketingDbContext>("postgres", tags: ["ready"])
     .AddCheck<RedisHealthCheck>("redis", tags: ["ready"])
     .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+
+// --- Trusted reverse proxy: when configured, the real client IP comes from X-Forwarded-For, but
+// only when the immediate peer is a trusted proxy (else the header is spoofable and would let an
+// attacker forge or poison rate-limit partitions). Off by default => the socket peer IP is used.
+var reverseProxy = builder.Configuration.GetSection(ReverseProxyOptions.SectionName).Get<ReverseProxyOptions>() ?? new();
+if (reverseProxy.Enabled)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.ForwardLimit = reverseProxy.ForwardLimit;
+        // Start from an EMPTY trust list (the framework defaults trust loopback) and add only the
+        // proxies we were explicitly told about.
+        options.KnownProxies.Clear();
+        options.KnownIPNetworks.Clear();
+        foreach (var proxy in reverseProxy.KnownProxies)
+            options.KnownProxies.Add(IPAddress.Parse(proxy));
+        foreach (var network in reverseProxy.KnownNetworks)
+            options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+    });
+}
 
 // --- Rate limiting on the auth endpoints: cut brute force off BEFORE PBKDF2 burns CPU per
 // guess. Fixed window per client IP; limit configurable (tests raise it, prod keeps it tight).
@@ -253,6 +284,11 @@ if (app.Environment.IsDevelopment())
     }
     await DevDataSeeder.SeedAsync(app.Services);
 }
+
+// Rewrite RemoteIpAddress from the trusted proxy's X-Forwarded-For BEFORE the rate limiter reads
+// it, so brute-force windows partition on the real client, not the shared ingress address.
+if (reverseProxy.Enabled)
+    app.UseForwardedHeaders();
 
 // Rate limiting sits before authentication: a brute-forcer gets 429'd without ever reaching
 // the password hasher.

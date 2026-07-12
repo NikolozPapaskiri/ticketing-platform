@@ -153,8 +153,10 @@ public class TicketingDbContext : DbContext
         {
             b.HasKey(t => t.Id);
             b.Property(t => t.TokenHash).IsRequired().HasMaxLength(64); // SHA-256 hex
+            b.Property(t => t.FamilyId).IsRequired();
             b.HasIndex(t => t.TokenHash).IsUnique();                    // hash-based lookup path
-            b.HasIndex(t => t.UserId);                                  // family revocation path
+            b.HasIndex(t => t.FamilyId);                                // family revocation path
+            b.HasIndex(t => t.UserId);
             b.HasOne(t => t.User)
                 .WithMany()
                 .HasForeignKey(t => t.UserId)
