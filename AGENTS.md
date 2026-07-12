@@ -530,7 +530,13 @@ This block supersedes older phase-progress lines above if they disagree.
   exchange/queue/retry-queue/DLQ; a duplicate ticket-issuer delivery test proves one ticket row +
   one matching PDF; and delivery metrics (outbox backlog-age gauge, returned/retried/quarantined
   counters, confirm-latency histogram, consumer retry/DLQ counters) close the gate.
-- Current verification: 153 backend tests (60 unit + 93 integration, incl. 6 waiting-room, 6
+- Waiting-room safety (PR 4) is DONE: AdmitBatchAsync is one atomic Lua script (pop + grant +
+  positions + empty-line de-register) metered by a per-event Redis token bucket (replica-count
+  independent). An admission is a Redis hash grant (quota + bound customer, TTL'd);
+  TryConsumeAdmissionAsync verifies event-binding, binds the customer on first use (leaked GUID ->
+  403), and decrements quota (-> 429); anonymous joins are per-client fixed-window throttled.
+  §4.5 gate met. Tests: expired-grant, wrong-event, over-quota, customer-binding, join-throttle.
+- Current verification: 161 backend tests (60 unit + 101 integration, incl. 14 waiting-room, 6
   payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and
   13 messaging tests: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-
   envelope/consumer-retry/poison/topology-readiness/duplicate-ticket),
@@ -543,9 +549,9 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- Immediate planned work: execute PR 4 (waiting-room atomicity / global admission control) in
-  `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview reps follow the safety gates.
-  Reserved seating and Elasticsearch remain optional and paused.
+- Immediate planned work: PR 5 (auth session concurrency + proxy-aware rate limiting) and PR 6
+  (deployment/storage/health/ops) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview
+  reps follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

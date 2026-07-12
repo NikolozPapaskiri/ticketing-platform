@@ -504,6 +504,28 @@ Add compatibility tests for every consumer.
 
 ## PR 4: Waiting-room atomicity and global admission control
 
+**Status: DONE** on branch `feature/waiting-room-safety`. `RedisWaitingRoom.AdmitBatchAsync` is now one Lua script: it pops
+from the line AND writes each visitor's TTL'd admission grant in the same operation (no
+pop-before-grant crash window), reads the next positions, and de-registers the event from the
+active set only when the line is empty at script time (a concurrent join can't be orphaned by a
+racing cleanup). Admissions are metered by a per-event Redis **token bucket** refilled from
+Redis's own clock at `WaitingRoom:AdmitRatePerSecond` (burst `AdmitBurst`), so the effective rate
+is constant regardless of how many API/worker replicas run an admitter — `AdmitBatchSize` is now
+only a per-call efficiency cap. Tests (real Redis): `Admission_ScriptCannotPopWithoutGrant`
+(conservation), `ConcurrentAdmitters_RespectOneGlobalRate`, `JoinRacingQueueCleanup_RemainsDiscoverable`.
+
+§4.3 is also done: an admission is now a Redis **hash grant** (quota + bound customer, TTL'd)
+written only by the admitter. Hold authorization calls `TryConsumeAdmissionAsync` — one atomic Lua
+op that verifies the grant for THIS event, binds it to the authenticated customer on first use (a
+leaked visitor id is useless to another account → 403), and decrements the per-admission hold
+quota (exhausted → 429). Anonymous joins are throttled per client (IP) by a Redis fixed-window
+counter so nobody mints unlimited positions (→ 429). Tests: expired-grant-cannot-hold,
+grant-cannot-be-used-for-another-event, grant-cannot-be-reused-beyond-quota, grant-binds-to-first-
+customer, multiple-visitor-ids-are-rate-limited. **PR 4 gate (§4.5) fully met** — admission atomic
+in Redis, rate independent of replica count, a leaked GUID alone can't reserve, reuse/position
+abuse bounded, polling + SignalR still fallback-compatible. 161 tests green (60 unit + 101
+integration); Release build 0 warnings.
+
 Suggested branch: `feature/waiting-room-safety`
 
 Suggested commits:

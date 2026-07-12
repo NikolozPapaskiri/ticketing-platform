@@ -6,11 +6,13 @@ using TicketingPlatform.Application.Common;
 namespace TicketingPlatform.Infrastructure.WaitingRoom;
 
 /// <summary>
-/// The load-leveling valve: every tick, admit AdmitBatchSize visitors per queued event and
-/// push live positions to the rest. The admission RATE is what protects the system - demand
-/// arrives as a spike, checkout traffic leaves as a steady drip.
-/// Safe under replicas without leader election because ZPOPMIN is atomic: two admitters
-/// admit disjoint visitors (the effective rate doubles, which is a tuning note, not a bug).
+/// The load-leveling valve: every tick, ask the waiting room to admit whoever the GLOBAL token
+/// bucket currently allows for each queued event and push live positions to the rest. The
+/// admission RATE is what protects the system - demand arrives as a spike, checkout traffic
+/// leaves as a steady drip.
+/// Safe under replicas without leader election: the admission decision (rate + pop + grant) is
+/// one atomic Redis script over a SHARED token bucket, so running this on N replicas cannot
+/// exceed the configured global rate - the interval below is only how often each replica asks.
 /// </summary>
 public sealed class WaitingRoomAdmitter : BackgroundService
 {

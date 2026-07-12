@@ -58,6 +58,9 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
         builder.UseSetting("RateLimiting:AuthRequestsPerMinute", "100000"); // the suite logs in constantly
         builder.UseSetting("WaitingRoom:AdmitBatchSize", "1");   // one admission per tick => positions observable
         builder.UseSetting("WaitingRoom:AdmitIntervalSeconds", "1"); // fast valve so queue tests finish in seconds
+        // The join throttle is keyed by client IP; the whole suite shares 127.0.0.1, so raise it
+        // out of the way here. WaitingRoomApiFactory overrides it low for the throttle test itself.
+        builder.UseSetting("WaitingRoom:JoinRateLimit", "100000");
         builder.UseSetting("FileStorage:Root", Path.Combine(Path.GetTempPath(), $"ticketing-tests-{Guid.NewGuid():N}"));
         builder.ConfigureTestServices(services =>
         {

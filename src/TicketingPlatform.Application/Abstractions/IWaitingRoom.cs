@@ -15,9 +15,29 @@ public interface IWaitingRoom
 
     Task<WaitingRoomStatus> GetStatusAsync(Guid eventId, Guid visitorId, CancellationToken ct);
 
-    /// <summary>The enforcement check the hold path calls before reserving.</summary>
+    /// <summary>Non-consuming check for the status view (does this visitor hold a live grant?).</summary>
     Task<bool> IsAdmittedAsync(Guid eventId, Guid visitorId, CancellationToken ct);
+
+    /// <summary>
+    /// The hold path's enforcement, done atomically in Redis: verifies the grant exists for THIS
+    /// event, binds it to the customer on first use (a leaked visitor id is useless to another
+    /// account), and decrements the per-admission hold quota - all in one round trip, so there is
+    /// no check-then-act gap for a leaked or shared grant to slip through.
+    /// </summary>
+    Task<AdmissionOutcome> TryConsumeAdmissionAsync(Guid eventId, Guid visitorId, string customerKey, CancellationToken ct);
+
+    /// <summary>Throttle anonymous queue joins per client so nobody mints unlimited positions.</summary>
+    Task<bool> TryRegisterJoinAsync(string clientKey, CancellationToken ct);
 }
 
 /// <summary>Position is 1-based; 0 when admitted (no longer in line).</summary>
 public sealed record WaitingRoomStatus(bool Admitted, long Position, long Waiting);
+
+/// <summary>Result of authorizing a hold against a waiting-room admission grant.</summary>
+public enum AdmissionOutcome
+{
+    Admitted,       // valid grant for this event + customer; quota decremented
+    NotAdmitted,    // no live grant (never admitted, or it expired)
+    WrongCustomer,  // the grant is bound to a different authenticated customer
+    QuotaExhausted  // the grant's hold allowance is used up
+}

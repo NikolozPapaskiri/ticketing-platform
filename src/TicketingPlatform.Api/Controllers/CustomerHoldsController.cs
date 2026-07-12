@@ -56,16 +56,27 @@ public sealed class CustomerHoldsController : ControllerBase
 
         // LOAD LEVELING: when the organizer armed the waiting room, only admitted visitors may
         // reserve. Enforced HERE, at the API, not in the UI - a curl user queues like everyone.
+        // The grant is CONSUMED atomically: it is event-bound, bound to this customer on first
+        // use (a leaked visitor id is useless to another account), and limited in quota.
         if (context.WaitingRoomEnabled)
         {
-            var isAdmitted = Guid.TryParse(Request.Headers[VisitorHeader], out var visitorId)
-                && await _waitingRoom.IsAdmittedAsync(context.EventId, visitorId, ct);
-            if (!isAdmitted)
+            if (!Guid.TryParse(Request.Headers[VisitorHeader], out var visitorId))
+                return WaitingRoomProblem("This on-sale uses a waiting room. Join the queue and retry once admitted.");
+
+            var outcome = await _waitingRoom.TryConsumeAdmissionAsync(
+                context.EventId, visitorId, $"customer:{CurrentUserId():N}", ct);
+            switch (outcome)
             {
-                return Problem(
-                    statusCode: StatusCodes.Status429TooManyRequests,
-                    title: "Waiting room is active",
-                    detail: "This on-sale uses a waiting room. Join the queue and retry once admitted.");
+                case AdmissionOutcome.Admitted:
+                    break;
+                case AdmissionOutcome.WrongCustomer:
+                    return Problem(statusCode: StatusCodes.Status403Forbidden,
+                        title: "Admission belongs to another account",
+                        detail: "This waiting-room admission was issued to a different customer.");
+                case AdmissionOutcome.QuotaExhausted:
+                    return WaitingRoomProblem("This admission has reached its reservation limit; re-join the queue.");
+                default:
+                    return WaitingRoomProblem("This on-sale uses a waiting room. Join the queue and retry once admitted.");
             }
         }
 
@@ -90,6 +101,9 @@ public sealed class CustomerHoldsController : ControllerBase
         var result = await _holds.GetForCustomerAsync(id, CurrentUserId(), ct);
         return result.IsSuccess ? Ok(result.Value) : NotFound();
     }
+
+    private ObjectResult WaitingRoomProblem(string detail) =>
+        Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Waiting room is active", detail: detail);
 
     private Guid CurrentUserId()
     {

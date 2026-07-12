@@ -27,16 +27,18 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
 - Frontend milestones M0-M6 are complete in `apps/web` (M5 = the tkt.ge-style marketplace,
   M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
   position pushes, 429-enforced checkout on gated events).
-- Current verified backend suite: 153 tests (60 unit + 93 integration).
+- Current verified backend suite: 161 tests (60 unit + 101 integration).
 - The three oversell-prevention strategies are load-tested head-to-head under flash-sale
   concurrency — zero oversell across all three; numbers and analysis in
   [docs/LOAD_TEST.md](docs/LOAD_TEST.md).
 - Post-reservation safety is being hardened per [docs/PRODUCTION_SAFETY_HARDENING_PLAN.md](docs/PRODUCTION_SAFETY_HARDENING_PLAN.md):
   **PR 1** (durable payment state machine), **PR 2** (atomic refund / ticket scan / hold release,
-  scanned-ticket-is-non-refundable), and **PR 3** (RabbitMQ delivery safety: publisher confirms +
+  scanned-ticket-is-non-refundable), **PR 3** (RabbitMQ delivery safety: publisher confirms +
   mandatory routing, topology-before-dispatch, bounded consumer retries + DLQ, versioned event
-  envelopes, and delivery metrics) are done — a payment in flight can't oversell, double-charge,
-  be lost to a crash, or be double-refunded; a ticket admits once; and no event is silently lost.
+  envelopes, and delivery metrics), and **PR 4** (waiting-room atomicity + a global, replica-
+  independent admission rate, with server-verifiable quota-limited grants) are done — a payment
+  in flight can't oversell, double-charge, be lost to a crash, or be double-refunded; a ticket
+  admits once; no event is silently lost; and a leaked admission GUID alone can't reserve.
 - Current verified frontend checks: typecheck, lint, production build, npm audit, and the
   Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the

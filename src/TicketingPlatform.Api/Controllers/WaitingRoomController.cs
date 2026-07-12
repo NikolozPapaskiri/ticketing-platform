@@ -1,6 +1,7 @@
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Application.Services;
 
@@ -28,8 +29,15 @@ public sealed class WaitingRoomController : ControllerBase
         if (request.VisitorId == Guid.Empty)
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "visitorId is required");
 
-        var result = await _waitingRoom.JoinAsync(eventId, request.VisitorId, ct);
-        return result.IsSuccess ? Ok(result.Value) : NotFound();
+        var clientKey = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var result = await _waitingRoom.JoinAsync(eventId, request.VisitorId, clientKey, ct);
+        return result.Error switch
+        {
+            ResultError.None => Ok(result.Value),
+            ResultError.Throttled => Problem(statusCode: StatusCodes.Status429TooManyRequests,
+                title: "Too many queue joins", detail: result.Message),
+            _ => NotFound()
+        };
     }
 
     [HttpGet("{visitorId:guid}")]
