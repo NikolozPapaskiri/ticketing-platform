@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Common;
 using TicketingPlatform.Infrastructure.Caching;
 using TicketingPlatform.Infrastructure.Documents;
 using TicketingPlatform.Infrastructure.Messaging;
@@ -25,6 +26,12 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        // Same image, different profile: the background workers run only on a role that runs
+        // workers (All/Worker), so scaling the API's HTTP replicas cannot multiply admission
+        // valves or scheduled jobs. API-only pods register none of them.
+        var role = HostRoleExtensions.ParseHostRole(configuration["Hosting:Role"]);
+        var runsWorkers = role.RunsWorkers();
+
         services.AddDbContext<TicketingDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("Default")));
 
@@ -38,27 +45,35 @@ public static class DependencyInjection
         services.AddScoped<IOrderRepository, OrderRepository>();
 
         // The outbox writer stages events through the caller's scoped DbContext (one transaction);
-        // the dispatcher + consumer + expiry service run as hosted background services.
+        // it runs on the API too (checkout writes rows). The dispatcher/consumers that PUBLISH and
+        // CONSUME from the broker are worker-only.
         services.AddScoped<IOutbox, OutboxWriter>();
         services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
-        // Declare the broker topology BEFORE the dispatcher/consumers start, so no publish can
-        // race ahead of its bindings. Registered first => its StartAsync completes first.
-        services.AddHostedService<RabbitMqTopologyInitializer>();
         services.AddSingleton<RabbitMqOutboxPublisher>();
         services.AddSingleton<IOutboxPublisher>(sp => sp.GetRequiredService<RabbitMqOutboxPublisher>());
-        services.AddHostedService<OutboxDispatcher>();
-        services.AddHostedService<NotificationConsumer>();
-        services.AddHostedService<HoldExpiryService>();
-        services.AddHostedService<PaymentReconciliationService>();
+        if (runsWorkers)
+        {
+            // Declare the broker topology BEFORE the dispatcher/consumers start, so no publish can
+            // race ahead of its bindings. Registered first => its StartAsync completes first.
+            services.AddHostedService<RabbitMqTopologyInitializer>();
+            services.AddHostedService<OutboxDispatcher>();
+            services.AddHostedService<NotificationConsumer>();
+            services.AddHostedService<HoldExpiryService>();
+            services.AddHostedService<PaymentReconciliationService>();
+        }
 
-        // CQRS: the projection consumer maintains the read model; the query port serves it.
-        services.AddHostedService<AvailabilityProjectionConsumer>();
+        // CQRS: the projection consumer maintains the read model (worker-only); the query port
+        // serves it (registered everywhere - the API reads the read model).
+        if (runsWorkers)
+            services.AddHostedService<AvailabilityProjectionConsumer>();
         services.AddScoped<IAvailabilityReadModel, AvailabilityReadModel>();
 
-        // Ticket issuing: PDF generation + file storage behind ports, consumed asynchronously.
+        // Ticket issuing: PDF generation + file storage behind ports. The consumer is worker-only;
+        // the ports stay registered everywhere (the API streams stored PDFs to clients).
         services.AddSingleton<ITicketDocumentGenerator, QuestPdfTicketGenerator>();
         services.AddSingleton<IFileStorage, LocalFileStorage>();
-        services.AddHostedService<TicketIssuerConsumer>();
+        if (runsWorkers)
+            services.AddHostedService<TicketIssuerConsumer>();
 
         // Security: PBKDF2 hashing + JWT creation. Singletons - both are stateless.
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
@@ -112,10 +127,12 @@ public static class DependencyInjection
                 break;
         }
 
-        // Virtual waiting room: Redis-backed line + the admission valve.
+        // Virtual waiting room: Redis-backed line (read/written by the API) + the admission valve
+        // (worker-only, so N API replicas cannot multiply the admission rate).
         services.AddSingleton<RedisWaitingRoom>();
         services.AddSingleton<IWaitingRoom>(sp => sp.GetRequiredService<RedisWaitingRoom>());
-        services.AddHostedService<WaitingRoomAdmitter>();
+        if (runsWorkers)
+            services.AddHostedService<WaitingRoomAdmitter>();
 
         return services;
     }

@@ -33,6 +33,11 @@ using TicketingPlatform.Infrastructure.Security;
 var builder = WebApplication.CreateBuilder(args);
 const string WebHubCorsPolicy = "web-hub";
 
+// One image, one of three profiles. Api serves HTTP with no background workers; Worker runs the
+// workers and serves only health; All (default: dev/tests/compose) does both. AddInfrastructure
+// reads the same setting to decide which hosted services to register.
+var hostRole = HostRoleExtensions.ParseHostRole(builder.Configuration["Hosting:Role"]);
+
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<FluentValidationFilter>();
@@ -171,10 +176,17 @@ builder.Services.AddCors(options =>
 // classic restart-loop-during-an-outage incident.
 builder.Services.AddSingleton<RedisHealthCheck>();
 builder.Services.AddSingleton<RabbitMqHealthCheck>();
+// RabbitMQ is an ASYNC dependency for the API: if the broker is down, checkout still writes outbox
+// rows to Postgres and the worker publishes them once it recovers - so a broker outage must NOT
+// pull API pods from the load balancer. It IS a hard readiness dependency for a worker, which
+// cannot function without it. Postgres and Redis gate readiness everywhere (Redis backs the
+// waiting room, the reservation strategy, the cache, and the SignalR backplane). Every check is
+// still reported on /health/detail regardless of whether it gates traffic.
+string[] rabbitReadinessTags = hostRole.RunsWorkers() ? ["ready"] : ["broker"];
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<TicketingDbContext>("postgres", tags: ["ready"])
     .AddCheck<RedisHealthCheck>("redis", tags: ["ready"])
-    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: rabbitReadinessTags);
 
 // --- Trusted reverse proxy: when configured, the real client IP comes from X-Forwarded-For, but
 // only when the immediate peer is a trusted proxy (else the header is spoofable and would let an
@@ -277,12 +289,16 @@ if (app.Environment.IsDevelopment())
 
     // Development convenience: migrate + seed the first PlatformAdmin so the closed
     // provisioning chain (only admins create staff) can start. Production migrates
-    // deliberately (CI/CD step), never implicitly at boot.
-    using (var scope = app.Services.CreateScope())
+    // deliberately (CI/CD step), never implicitly at boot. Only an API-serving role does this,
+    // so a split-out worker pod does not race the API to migrate the same database.
+    if (hostRole.ServesApi())
     {
-        await scope.ServiceProvider.GetRequiredService<TicketingDbContext>().Database.MigrateAsync();
+        using (var scope = app.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<TicketingDbContext>().Database.MigrateAsync();
+        }
+        await DevDataSeeder.SeedAsync(app.Services);
     }
-    await DevDataSeeder.SeedAsync(app.Services);
 }
 
 // Rewrite RemoteIpAddress from the trusted proxy's X-Forwarded-For BEFORE the rate limiter reads
@@ -301,17 +317,29 @@ app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseAuthorization();
 
-// Probe endpoints (anonymous by design - Kubernetes is not going to log in).
+// Probe endpoints (anonymous by design - Kubernetes is not going to log in). Every role serves
+// these so both the API and worker Deployments are probeable.
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
+// Detailed, non-gating dependency view for humans/dashboards - reports every check (incl. the
+// async broker) separately from the readiness decision.
+app.MapHealthChecks("/health/detail", new HealthCheckOptions
+{
+    Predicate = _ => true,
+    ResponseWriter = HealthResponse.WriteAsync
+});
 
-app.MapHub<AvailabilityHub>("/hubs/availability")
-    .RequireCors(WebHubCorsPolicy); // live availability push (anonymous by design)
+// API-serving roles (All/Api) expose the application surface; a Worker pod serves only health.
+if (hostRole.ServesApi())
+{
+    app.MapHub<AvailabilityHub>("/hubs/availability")
+        .RequireCors(WebHubCorsPolicy); // live availability push (anonymous by design)
 
-// The vertical-slice set piece (see the file's header for the architecture argument).
-app.MapEventSalesReport();
+    // The vertical-slice set piece (see the file's header for the architecture argument).
+    app.MapEventSalesReport();
 
-app.MapControllers();
+    app.MapControllers();
+}
 
 app.Run();
 
