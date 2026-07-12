@@ -413,9 +413,13 @@ expires. `OutboxLockSeconds` remains 30 seconds in production and is shortened o
 factory. The broker-interruption failure window is therefore covered without timing-dependent
 container restarts.
 
+The complementary post-confirm crash test proves at-least-once delivery rather than exactly-once:
+RabbitMQ receives the first copy, a simulated process loss prevents `ProcessedAt` from being saved,
+and the same outbox row publishes a second copy after its lease expires. Both broker copies carry
+the same `MessageId`; downstream per-consumer dedupe is the mechanism that makes this safe.
+
 **Still open (PR 3 tail):** the remaining §3.5 tests
-(`Outbox_PublishBeforeProcessedCrash_DeliversAtLeastOnce`, the duplicate-delivery ticket-issuer
-test, and an explicit topology-ready test).
+(the duplicate-delivery ticket-issuer test and an explicit topology-ready test).
 
 Suggested branch: `feature/rabbitmq-delivery-safety`
 

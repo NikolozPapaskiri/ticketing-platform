@@ -196,7 +196,7 @@ public sealed class OutboxDeliveryTests
     [Fact]
     public async Task Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage()
     {
-        _factory.Services.GetRequiredService<FailOnceOutboxPublisher>().FailNextPublish();
+        _factory.Services.GetRequiredService<FailOnceOutboxPublisher>().FailNextPublishBeforeConfirm();
         var messageId = Guid.NewGuid();
         await WithDbAsync(async db =>
         {
@@ -232,6 +232,69 @@ public sealed class OutboxDeliveryTests
             Assert.NotNull(claimed);
             Assert.Null(claimed!.ProcessedAt);
             Assert.Equal(0, claimed.Attempts);
+
+            OutboxMessage? processed = null;
+            for (var i = 0; i < 40; i++)
+            {
+                await Task.Delay(250);
+                processed = await ReadAsync(messageId);
+                if (processed?.ProcessedAt is not null)
+                    break;
+            }
+
+            Assert.NotNull(processed);
+            Assert.NotNull(processed!.ProcessedAt);
+            Assert.Equal(1, processed.Attempts);
+        }
+        finally
+        {
+            await DeleteAsync(messageId);
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_PublishBeforeProcessedCrash_DeliversAtLeastOnce()
+    {
+        await using var connection = await CreateRabbitConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        var queue = await channel.QueueDeclareAsync($"confirm-crash-{Guid.NewGuid():N}", durable: false,
+            exclusive: true, autoDelete: true);
+        await channel.QueueBindAsync(queue.QueueName, "ticketing-events", "AvailabilityChanged");
+
+        _factory.Services.GetRequiredService<FailOnceOutboxPublisher>().FailNextPublishAfterConfirm();
+        var messageId = Guid.NewGuid();
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = messageId,
+                Type = "AvailabilityChanged",
+                TenantId = Guid.NewGuid(),
+                Payload = JsonSerializer.Serialize(new
+                {
+                    eventId = Guid.NewGuid(),
+                    ticketTypeId = Guid.NewGuid()
+                }),
+                OccurredAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        });
+
+        try
+        {
+            // RabbitMQ already owns the first copy, but the injected post-confirm failure prevents
+            // ProcessedAt from being saved. This is the unavoidable at-least-once window.
+            var first = await WaitForDeliveryAsync(channel, queue.QueueName);
+            Assert.Equal(messageId.ToString(), first.BasicProperties.MessageId);
+
+            var afterFault = await ReadAsync(messageId);
+            Assert.NotNull(afterFault);
+            Assert.Null(afterFault!.ProcessedAt);
+            Assert.Equal(0, afterFault.Attempts);
+
+            // The claim expires, the same row publishes again, and the probe sees the same id.
+            var second = await WaitForDeliveryAsync(channel, queue.QueueName);
+            Assert.Equal(messageId.ToString(), second.BasicProperties.MessageId);
 
             OutboxMessage? processed = null;
             for (var i = 0; i < 40; i++)
@@ -297,6 +360,19 @@ public sealed class OutboxDeliveryTests
             Password = "ticketing"
         };
         return await factory.CreateConnectionAsync();
+    }
+
+    private static async Task<BasicGetResult> WaitForDeliveryAsync(IChannel channel, string queue)
+    {
+        for (var i = 0; i < 60; i++)
+        {
+            var result = await channel.BasicGetAsync(queue, autoAck: true);
+            if (result is not null)
+                return result;
+            await Task.Delay(250);
+        }
+
+        throw new Xunit.Sdk.XunitException("the probe queue did not receive a publication within 15s");
     }
 
     private async Task<OutboxMessage?> ReadAsync(Guid id)

@@ -525,11 +525,12 @@ This block supersedes older phase-progress lines above if they disagree.
   effects; unsupported versions park immediately. AddIntegrationEventEnvelopeMetadata migration.
   The dispatcher’s real publisher is isolated behind IOutboxPublisher; a deterministic injected
   pre-confirm transport loss proves the same claimed row is retried after its configurable lease.
-  Remaining PR 3 work: publish-confirmed/process-crash test, duplicate ticket-issuer delivery
-  test, explicit topology-ready test, and the completion-gate messaging metrics.
-- Current verification: 150 backend tests (60 unit + 90 integration, incl. 6 waiting-room, 6
+  A post-confirm/process-crash test proves deliberate duplicate delivery of the same MessageId
+  before ProcessedAt is saved. Remaining PR 3 work: duplicate ticket-issuer delivery test,
+  explicit topology-ready test, and the completion-gate messaging metrics.
+- Current verification: 151 backend tests (60 unit + 91 integration, incl. 6 waiting-room, 6
   payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and
-  10 outbox/envelope/consumer-delivery tests),
+  11 outbox/envelope/consumer-delivery tests),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
