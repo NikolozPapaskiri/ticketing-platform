@@ -534,16 +534,23 @@ This block supersedes older phase-progress lines above if they disagree.
   scanned ticket is non-refundable** (409). `AddRefundPendingAndTicketConcurrency` migration.
   Next: PR 3 (RabbitMQ
   publisher confirms + topology + bounded retry).
-- **RabbitMQ delivery safety (hardening plan PR 3) — P0 done, tail open.** A
-  `RabbitMqTopologyInitializer` declares the exchange/DLX/all consumer queues+bindings before the
-  dispatcher starts; the dispatcher publishes with **publisher confirms + tracking** and
-  `mandatory: true`, marking a row processed only after the broker ACKs (an unroutable/unconfirmed
-  message stays in the outbox for retry). Fixed a latent bug: `OrderRefunded` had no binding and
-  was silently dropped — now routed to `notifications`. **Tail:** bounded transient consumer
-  retries (retry queue + TTL + attempt cap before DLQ) and versioned event envelopes.
-- Current verification: 141 backend tests (60 unit + 81 integration, incl. 6 waiting-room, 6
-  payment-race/reconciliation, 5 refund/scan/release across all strategies, and 1 outbox
-  delivery), plus frontend typecheck, lint, production build, Playwright e2e (4), and live smoke.
+- **RabbitMQ delivery safety (hardening plan PR 3) — DONE.** A `RabbitMqTopologyInitializer`
+  declares the exchange/DLX/all consumer queues+bindings+retry queues before the dispatcher starts;
+  the dispatcher publishes with **publisher confirms + tracking** and `mandatory: true`, marking a
+  row processed only after the broker ACKs, with exponential-backoff retry (`NextAttemptAt`) and
+  operator-visible quarantine (`FailedAt`/`LastError`). Consumers share one failure policy (poison
+  → DLQ immediately; transient → durable per-consumer/per-event TTL retry queue with an attempt
+  cap). Events cross the boundary as typed `IIntegrationEvent` records wrapped in a **versioned
+  envelope** (messageId/eventType/schemaVersion/occurredAt/tenantId/correlationId/payload). Fixed a
+  latent bug: `OrderRefunded` had no binding and was silently dropped. Full §3.5 test set +
+  delivery metrics (outbox backlog-age gauge, returned/retried/quarantined counters, confirm-latency
+  histogram, consumer retry/DLQ counters). Fixed `OrderRefunded` routing. Next: **PR 4** (waiting
+  room atomicity + global admission control).
+- Current verification: 153 backend tests (60 unit + 93 integration, incl. 6 waiting-room, 6
+  payment-race/reconciliation, 5 refund/scan/release across all strategies, and the messaging
+  suite: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/
+  consumer-retry/poison/topology-readiness/duplicate-ticket), plus frontend typecheck, lint,
+  production build, Playwright e2e (4), and live smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
 - Use `localhost`, not `127.0.0.1`, for Next dev and Playwright. Local HTTP auth cookies need
@@ -555,9 +562,9 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Immediate planned work: continue `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md` at **PR 3**
-  (RabbitMQ publisher confirms, topology-before-dispatch, bounded consumer retry). Mock-interview
-  reps follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- Immediate planned work: continue `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md` at **PR 4**
+  (waiting-room atomicity: pop-before-grant crash safety + global multi-replica admission control).
+  Mock-interview reps follow the safety gates. Reserved seating and Elasticsearch remain paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

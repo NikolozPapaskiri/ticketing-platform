@@ -72,6 +72,8 @@ public sealed class OutboxDispatcher : BackgroundService
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
 
+        await RecordBacklogAgeAsync(db, ct);
+
         var batch = await ClaimBatchAsync(db, ct);
 
         if (batch.Count == 0)
@@ -104,7 +106,11 @@ public sealed class OutboxDispatcher : BackgroundService
                 // message (no binding) is RETURNED and surfaces as a PublishException instead of
                 // being silently dropped. A row is marked processed ONLY after that confirmation -
                 // the outbox never lies about delivery.
+                var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 await _publisher.PublishAsync(message.Type, properties, body, ct);
+                TicketingMetrics.OutboxConfirmLatency.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                    new KeyValuePair<string, object?>("event_type", message.Type));
 
                 message.ProcessedAt = DateTimeOffset.UtcNow;
                 message.Attempts++;
@@ -124,11 +130,15 @@ public sealed class OutboxDispatcher : BackgroundService
                 message.LockedBy = null;
                 message.LockedUntil = null;
                 message.LastError = Truncate(ex.Message, 2000);
+                TicketingMetrics.OutboxPublishReturned.Add(1,
+                    new KeyValuePair<string, object?>("event_type", message.Type),
+                    new KeyValuePair<string, object?>("returned", ex.IsReturn));
 
                 if (message.Attempts >= MaxAttempts)
                 {
                     message.FailedAt = failedAt;
                     message.NextAttemptAt = null;
+                    TicketingMetrics.OutboxQuarantined.Add(1, new KeyValuePair<string, object?>("event_type", message.Type));
                     _logger.LogError(ex,
                         "Outbox message {MessageId} ({Type}) exhausted {Attempts} publish attempts and was quarantined",
                         message.Id, message.Type, message.Attempts);
@@ -136,6 +146,7 @@ public sealed class OutboxDispatcher : BackgroundService
                 else
                 {
                     message.NextAttemptAt = failedAt.Add(CalculateRetryDelay(message.Attempts));
+                    TicketingMetrics.OutboxRetried.Add(1, new KeyValuePair<string, object?>("event_type", message.Type));
                     _logger.LogWarning(ex,
                         "Outbox message {MessageId} ({Type}) was not confirmed (returned={Returned}); retry {Attempt}/{MaxAttempts} after {NextAttemptAt}",
                         message.Id, message.Type, ex.IsReturn, message.Attempts,
@@ -152,6 +163,7 @@ public sealed class OutboxDispatcher : BackgroundService
                 message.LockedBy = null;
                 message.LockedUntil = null;
                 message.LastError = Truncate(ex.Message, 2000);
+                TicketingMetrics.OutboxQuarantined.Add(1, new KeyValuePair<string, object?>("event_type", message.Type));
                 _logger.LogError(ex,
                     "Outbox message {MessageId} ({Type}) has an invalid integration-event contract and was quarantined",
                     message.Id, message.Type);
@@ -198,6 +210,20 @@ public sealed class OutboxDispatcher : BackgroundService
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return batch;
+    }
+
+    private static async Task RecordBacklogAgeAsync(TicketingDbContext db, CancellationToken ct)
+    {
+        // Oldest still-deliverable row = how far behind the pipeline is. Quarantined (FailedAt)
+        // rows are excluded: they are an operator's problem, not live backlog.
+        var oldest = await db.OutboxMessages.AsNoTracking()
+            .Where(m => m.ProcessedAt == null && m.FailedAt == null)
+            .OrderBy(m => m.OccurredAt)
+            .Select(m => (DateTimeOffset?)m.OccurredAt)
+            .FirstOrDefaultAsync(ct);
+
+        var ageMs = oldest is null ? 0L : (long)Math.Max(0, (DateTimeOffset.UtcNow - oldest.Value).TotalMilliseconds);
+        TicketingMetrics.SetOutboxBacklogAgeMs(ageMs);
     }
 
     private TimeSpan CalculateRetryDelay(int attempts)

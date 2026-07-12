@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using TicketingPlatform.Application.Common;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
@@ -26,6 +27,9 @@ internal static class ConsumerRetryPolicy
             logger.LogError(failure,
                 "Poison message {MessageId} in {ConsumerQueue}; dead-lettering without retry",
                 delivery.BasicProperties.MessageId, consumerQueue);
+            TicketingMetrics.ConsumerDeadLettered.Add(1,
+                new KeyValuePair<string, object?>("consumer_queue", consumerQueue),
+                new KeyValuePair<string, object?>("reason", "poison"));
             await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: false, ct);
             return;
         }
@@ -35,6 +39,9 @@ internal static class ConsumerRetryPolicy
             logger.LogError(failure,
                 "Message {MessageId} in {ConsumerQueue} exhausted {Attempts} attempts; dead-lettering",
                 delivery.BasicProperties.MessageId, consumerQueue, attempt);
+            TicketingMetrics.ConsumerDeadLettered.Add(1,
+                new KeyValuePair<string, object?>("consumer_queue", consumerQueue),
+                new KeyValuePair<string, object?>("reason", "exhausted"));
             await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: false, ct);
             return;
         }
@@ -65,6 +72,7 @@ internal static class ConsumerRetryPolicy
             await channel.BasicPublishAsync(string.Empty, retryQueue, mandatory: true, properties,
                 delivery.Body, ct);
             await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false, ct);
+            TicketingMetrics.ConsumerRetried.Add(1, new KeyValuePair<string, object?>("consumer_queue", consumerQueue));
             logger.LogWarning(failure,
                 "Message {MessageId} in {ConsumerQueue} scheduled for retry {Attempt}/{MaxAttempts}",
                 delivery.BasicProperties.MessageId, consumerQueue, nextAttempt, maxAttempts);
