@@ -504,6 +504,20 @@ Add compatibility tests for every consumer.
 
 ## PR 4: Waiting-room atomicity and global admission control
 
+**Status: IN PROGRESS — atomicity (§4.1) and the global rate (§4.2) are DONE** on branch
+`feature/waiting-room-safety`. `RedisWaitingRoom.AdmitBatchAsync` is now one Lua script: it pops
+from the line AND writes each visitor's TTL'd admission grant in the same operation (no
+pop-before-grant crash window), reads the next positions, and de-registers the event from the
+active set only when the line is empty at script time (a concurrent join can't be orphaned by a
+racing cleanup). Admissions are metered by a per-event Redis **token bucket** refilled from
+Redis's own clock at `WaitingRoom:AdmitRatePerSecond` (burst `AdmitBurst`), so the effective rate
+is constant regardless of how many API/worker replicas run an admitter — `AdmitBatchSize` is now
+only a per-call efficiency cap. Tests (real Redis): `Admission_ScriptCannotPopWithoutGrant`
+(conservation), `ConcurrentAdmitters_RespectOneGlobalRate`, `JoinRacingQueueCleanup_RemainsDiscoverable`.
+156 tests green. **Still open (§4.3, §4.4 tests 4–7):** replace the bare client GUID with a
+server-verifiable, event-bound, quota-limited admission grant consumed atomically at hold
+authorization, plus join throttling / abuse limits.
+
 Suggested branch: `feature/waiting-room-safety`
 
 Suggested commits:
