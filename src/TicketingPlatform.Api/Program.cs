@@ -150,6 +150,11 @@ builder.Services.AddSingleton(
     builder.Configuration.GetSection(TicketingPlatform.Application.Common.AuthSessionOptions.SectionName)
         .Get<TicketingPlatform.Application.Common.AuthSessionOptions>() ?? new());
 
+// Retention windows for the unbounded bookkeeping tables (used by the worker's retention sweep).
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection(TicketingPlatform.Application.Common.RetentionOptions.SectionName)
+        .Get<TicketingPlatform.Application.Common.RetentionOptions>() ?? new());
+
 // SignalR with the Redis backplane: group membership and broadcasts flow through Redis, so a
 // message published from pod B reaches a client connected to pod A. Without the backplane,
 // live availability silently breaks the moment there is a second replica.

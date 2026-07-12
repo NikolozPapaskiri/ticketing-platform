@@ -62,6 +62,9 @@ public static class DependencyInjection
             services.AddHostedService<NotificationConsumer>();
             services.AddHostedService<HoldExpiryService>();
             services.AddHostedService<PaymentReconciliationService>();
+            // Retention sweep for the unbounded bookkeeping tables (outbox, dedupe, idempotency,
+            // dead refresh tokens). Worker-only scheduled work.
+            services.AddHostedService<RetentionService>();
         }
 
         // CQRS: the projection consumer maintains the read model (worker-only); the query port

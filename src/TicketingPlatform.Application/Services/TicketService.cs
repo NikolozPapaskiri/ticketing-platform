@@ -23,14 +23,20 @@ public sealed class TicketService
             return Result<TicketValidationResponse>.NotFound("Ticket was not found.");
 
         if (ticket.Status != TicketStatus.Issued)
+        {
+            TicketingMetrics.TicketScanConflicts.Add(1);
             return Result<TicketValidationResponse>.Conflict($"Ticket is '{ticket.Status}' and cannot be scanned.");
+        }
 
         // Atomic admission: the ticket's concurrency token turns the Issued -> Scanned flip into a
         // compare-and-swap. Two scanners racing on one code produce exactly one success; the loser's
         // save finds the token already moved and comes back as a conflict (already admitted).
         ticket.MarkScanned(_clock.GetUtcNow());
         if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
+        {
+            TicketingMetrics.TicketScanConflicts.Add(1);
             return Result<TicketValidationResponse>.Conflict("Ticket has already been scanned.");
+        }
 
         TicketingMetrics.TicketsScanned.Add(1);
         return Result<TicketValidationResponse>.Success(new TicketValidationResponse(

@@ -71,6 +71,10 @@ public sealed class PaymentReconciliationService : BackgroundService
             pendingRefunds = await repo.GetOrderIdsWithStaleRefundClaimAsync(now - _options.PaymentLease, BatchSize, ct);
         }
 
+        // Backlog gauges: a rising, non-draining value means money is stuck awaiting reconciliation.
+        TicketingMetrics.SetPaymentReconciliationBacklog(pendingPayments.Count);
+        TicketingMetrics.SetRefundReconciliationBacklog(pendingRefunds.Count);
+
         var payments = 0;
         foreach (var id in pendingPayments)
         {
