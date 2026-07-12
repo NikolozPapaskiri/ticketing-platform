@@ -1,7 +1,6 @@
-# CI: every push/PR builds the solution and runs ALL tests - including the integration suite,
-# which spins up real Postgres/Redis/RabbitMQ containers via Testcontainers (GitHub's ubuntu
-# runners ship Docker, so "test against real infrastructure" holds in CI too).
-# On main, the container image is also built and pushed to GHCR.
+# CI: build + test (unit and integration via Testcontainers), verify the EF model matches the
+# migrations, audit dependencies, run the Playwright golden journey against the REAL compose stack,
+# and build + scan both container images (publishing to GHCR only from main).
 name: ci
 
 on:
@@ -29,6 +28,26 @@ jobs:
       - name: Test (unit + integration via Testcontainers)
         run: dotnet test --no-build -c Release --logger "console;verbosity=normal"
 
+      # The model and the migrations must not drift: a green build with an un-migrated model change
+      # would fail at deploy time. This is a hard gate now that the false positive is resolved.
+      - name: Verify no pending EF model changes
+        run: |
+          dotnet tool install --global dotnet-ef
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations has-pending-model-changes \
+            --project src/TicketingPlatform.Infrastructure \
+            --startup-project src/TicketingPlatform.Api
+
+      # Explicit failure policy: any known-vulnerable NuGet package (including transitive) fails CI.
+      - name: NuGet vulnerability audit
+        run: |
+          report=$(dotnet list TicketingPlatform.sln package --vulnerable --include-transitive 2>&1)
+          echo "$report"
+          if echo "$report" | grep -qE '(Critical|High|Moderate|Low)'; then
+            echo "::error::Vulnerable NuGet packages detected"
+            exit 1
+          fi
+
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -55,8 +74,60 @@ jobs:
       - name: Build
         run: npm run build
 
-  docker-image:
-    # The image is proof the Dockerfile stays buildable; it only publishes from main.
+      # Explicit failure policy: a high or critical npm advisory fails CI.
+      - name: npm vulnerability audit
+        run: npm audit --audit-level=high
+
+  e2e:
+    # The golden journey against the actual API + web + infra (Postgres/Redis/RabbitMQ/MinIO),
+    # exercising the API/worker split and object storage end to end.
+    needs: [build-and-test, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the full stack (docker compose)
+        run: docker compose up -d --build
+
+      - name: Wait for the web app
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000 >/dev/null 2>&1; then echo "web ready"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::web did not become ready"
+          docker compose logs
+          exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web deps and the Playwright browser
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright against the running stack
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_SKIP_WEB_SERVER: "1"   # do not start a dev server; hit the compose web
+          WEB_BASE_URL: http://localhost:3000
+        run: npm run e2e
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  images:
+    # Proof both Dockerfiles stay buildable; scan them; publish to GHCR only from main.
     needs: [build-and-test, web]
     runs-on: ubuntu-latest
     permissions:
@@ -64,6 +135,42 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute lowercase image base
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.image.outputs.name }}-api:ci
+
+      - name: Scan API image (report-only)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}-api:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/web
+          load: true
+          tags: ${{ steps.image.outputs.name }}-web:ci
+
+      - name: Scan web image (report-only)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}-web:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
 
       - name: Log in to GHCR
         if: github.event_name == 'push'
@@ -73,17 +180,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Docker tags must be lowercase; github.repository preserves the account's capitals
-      # (NikolozPapaskiri/...), so lowercase it first - bash ${VAR,,} does exactly that.
-      - name: Compute lowercase image name
-        id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Build (and push on main)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ${{ steps.image.outputs.name }}:latest
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
+      - name: Push images (main only)
+        if: github.event_name == 'push'
+        run: |
+          for repo in api web; do
+            base="${{ steps.image.outputs.name }}-$repo"
+            docker tag "$base:ci" "$base:latest"
+            docker tag "$base:ci" "$base:${{ github.sha }}"
+            docker push "$base:latest"
+            docker push "$base:${{ github.sha }}"
+          done
