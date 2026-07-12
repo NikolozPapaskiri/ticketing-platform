@@ -213,9 +213,14 @@ public class TicketingDbContext : DbContext
             b.HasKey(m => m.Id);
             b.Property(m => m.Type).IsRequired().HasMaxLength(100);
             b.Property(m => m.Payload).IsRequired();
+            b.Property(m => m.SchemaVersion).HasDefaultValue(1);
+            b.Property(m => m.CorrelationId).HasMaxLength(64);
             b.Property(m => m.LockedBy).HasMaxLength(100);
+            b.Property(m => m.LastError).HasMaxLength(2000);
             b.HasIndex(m => new { m.ProcessedAt, m.OccurredAt }); // the dispatcher's poll path
             b.HasIndex(m => new { m.ProcessedAt, m.LockedUntil, m.OccurredAt });
+            b.HasIndex(m => new { m.ProcessedAt, m.FailedAt, m.NextAttemptAt, m.LockedUntil, m.OccurredAt })
+                .HasDatabaseName("IX_OutboxMessages_Dispatchable");
         });
 
         modelBuilder.Entity<ProcessedMessage>(b =>

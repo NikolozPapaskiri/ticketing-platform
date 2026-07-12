@@ -1,5 +1,8 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RabbitMQ.Client;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
 
@@ -27,6 +30,7 @@ public sealed class OutboxDeliveryTests
             {
                 Id = probeId,
                 Type = "UnroutableProbe", // no queue binds this key => mandatory publish is returned
+                TenantId = Guid.NewGuid(),
                 Payload = "{}",
                 OccurredAt = DateTimeOffset.UtcNow
             });
@@ -56,6 +60,319 @@ public sealed class OutboxDeliveryTests
             // Stop the dispatcher retrying the probe for the rest of the shared run.
             await WithDbAsync(db => db.OutboxMessages.Where(m => m.Id == probeId).ExecuteDeleteAsync());
         }
+    }
+
+    [Fact]
+    public async Task Outbox_UnroutableMessage_IsBackedOffAfterFailure()
+    {
+        var probeId = await InsertProbeAsync();
+
+        try
+        {
+            var firstFailure = await WaitForAttemptAsync(probeId);
+            var attemptsAfterFailure = firstFailure.Attempts;
+
+            // The test factory configures a 30-second base delay. A failed row must therefore
+            // not be selected again by the dispatcher's one-second polling loop during this
+            // observation window. The current implementation retries it on every poll.
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            var afterBackoffWindow = await ReadAsync(probeId);
+            Assert.NotNull(afterBackoffWindow);
+            Assert.Equal(attemptsAfterFailure, afterBackoffWindow!.Attempts);
+            Assert.Null(afterBackoffWindow.ProcessedAt);
+        }
+        finally
+        {
+            await DeleteAsync(probeId);
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_MessageAtAttemptCap_IsNotDispatchedAgain()
+    {
+        // The configured cap is two. Seed a failed message at the cap and prove the dispatcher
+        // does not keep publishing it forever. A later implementation will make the terminal
+        // failure operator-visible; this test first pins the bounded-delivery invariant.
+        var probeId = await InsertProbeAsync(attempts: 2);
+
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            var row = await ReadAsync(probeId);
+            Assert.NotNull(row);
+            Assert.Equal(2, row!.Attempts);
+            Assert.Null(row.ProcessedAt);
+        }
+        finally
+        {
+            await DeleteAsync(probeId);
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_UnroutableMessage_IsQuarantinedWhenAttemptBudgetIsExhausted()
+    {
+        // One failed publish reaches the test factory's configured cap of two.
+        var probeId = await InsertProbeAsync(attempts: 1);
+
+        try
+        {
+            OutboxMessage? failed = null;
+            for (var i = 0; i < 20; i++)
+            {
+                await Task.Delay(500);
+                failed = await ReadAsync(probeId);
+                if (failed?.FailedAt is not null)
+                    break;
+            }
+
+            Assert.NotNull(failed);
+            Assert.NotNull(failed!.FailedAt);
+            Assert.Equal(2, failed.Attempts);
+            Assert.Null(failed.ProcessedAt);
+            Assert.Null(failed.NextAttemptAt);
+            Assert.False(string.IsNullOrWhiteSpace(failed.LastError));
+        }
+        finally
+        {
+            await DeleteAsync(probeId);
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_PublishesVersionedIntegrationEventEnvelope()
+    {
+        await using var connection = await CreateRabbitConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        var queue = await channel.QueueDeclareAsync(queue: string.Empty, durable: false,
+            exclusive: true, autoDelete: true);
+        await channel.QueueBindAsync(queue.QueueName, "ticketing-events", "AvailabilityChanged");
+
+        var messageId = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var ticketTypeId = Guid.NewGuid();
+        var occurredAt = DateTimeOffset.UtcNow;
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = messageId,
+                Type = "AvailabilityChanged",
+                CorrelationId = "envelope-contract-test",
+                Payload = JsonSerializer.Serialize(new { tenantId, eventId, ticketTypeId }),
+                OccurredAt = occurredAt
+            });
+            await db.SaveChangesAsync();
+        });
+
+        BasicGetResult? delivery = null;
+        for (var i = 0; i < 40 && delivery is null; i++)
+        {
+            delivery = await channel.BasicGetAsync(queue.QueueName, autoAck: false);
+            if (delivery is null)
+                await Task.Delay(250);
+        }
+
+        Assert.NotNull(delivery);
+        using var body = JsonDocument.Parse(Encoding.UTF8.GetString(delivery!.Body.Span));
+        var root = body.RootElement;
+        Assert.Equal(messageId, root.GetProperty("messageId").GetGuid());
+        Assert.Equal("AvailabilityChanged", root.GetProperty("eventType").GetString());
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(tenantId, root.GetProperty("tenantId").GetGuid());
+        Assert.Equal("envelope-contract-test", root.GetProperty("correlationId").GetString());
+        Assert.Equal(occurredAt.ToUnixTimeMilliseconds(),
+            root.GetProperty("occurredAt").GetDateTimeOffset().ToUnixTimeMilliseconds());
+        Assert.Equal(ticketTypeId, root.GetProperty("payload").GetProperty("ticketTypeId").GetGuid());
+        Assert.Equal(messageId.ToString(), delivery.BasicProperties.MessageId);
+        await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false);
+
+        await DeleteAsync(messageId);
+    }
+
+    [Fact]
+    public async Task Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage()
+    {
+        _factory.Services.GetRequiredService<FailOnceOutboxPublisher>().FailNextPublishBeforeConfirm();
+        var messageId = Guid.NewGuid();
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = messageId,
+                Type = "AvailabilityChanged",
+                TenantId = Guid.NewGuid(),
+                Payload = JsonSerializer.Serialize(new
+                {
+                    eventId = Guid.NewGuid(),
+                    ticketTypeId = Guid.NewGuid()
+                }),
+                OccurredAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        });
+
+        try
+        {
+            // The test publisher injects a connection-loss equivalent before RabbitMQ can confirm
+            // the first send. The row must remain unprocessed and become claimable after its short
+            // test lease expires; the real publisher then sends the original message id.
+            OutboxMessage? claimed = null;
+            for (var i = 0; i < 20; i++)
+            {
+                await Task.Delay(250);
+                claimed = await ReadAsync(messageId);
+                if (claimed?.LockedUntil is not null)
+                    break;
+            }
+
+            Assert.NotNull(claimed);
+            Assert.Null(claimed!.ProcessedAt);
+            Assert.Equal(0, claimed.Attempts);
+
+            OutboxMessage? processed = null;
+            for (var i = 0; i < 40; i++)
+            {
+                await Task.Delay(250);
+                processed = await ReadAsync(messageId);
+                if (processed?.ProcessedAt is not null)
+                    break;
+            }
+
+            Assert.NotNull(processed);
+            Assert.NotNull(processed!.ProcessedAt);
+            Assert.Equal(1, processed.Attempts);
+        }
+        finally
+        {
+            await DeleteAsync(messageId);
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_PublishBeforeProcessedCrash_DeliversAtLeastOnce()
+    {
+        await using var connection = await CreateRabbitConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        var queue = await channel.QueueDeclareAsync($"confirm-crash-{Guid.NewGuid():N}", durable: false,
+            exclusive: true, autoDelete: true);
+        await channel.QueueBindAsync(queue.QueueName, "ticketing-events", "AvailabilityChanged");
+
+        _factory.Services.GetRequiredService<FailOnceOutboxPublisher>().FailNextPublishAfterConfirm();
+        var messageId = Guid.NewGuid();
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = messageId,
+                Type = "AvailabilityChanged",
+                TenantId = Guid.NewGuid(),
+                Payload = JsonSerializer.Serialize(new
+                {
+                    eventId = Guid.NewGuid(),
+                    ticketTypeId = Guid.NewGuid()
+                }),
+                OccurredAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        });
+
+        try
+        {
+            // RabbitMQ already owns the first copy, but the injected post-confirm failure prevents
+            // ProcessedAt from being saved. This is the unavoidable at-least-once window.
+            var first = await WaitForDeliveryAsync(channel, queue.QueueName);
+            Assert.Equal(messageId.ToString(), first.BasicProperties.MessageId);
+
+            var afterFault = await ReadAsync(messageId);
+            Assert.NotNull(afterFault);
+            Assert.Null(afterFault!.ProcessedAt);
+            Assert.Equal(0, afterFault.Attempts);
+
+            // The claim expires, the same row publishes again, and the probe sees the same id.
+            var second = await WaitForDeliveryAsync(channel, queue.QueueName);
+            Assert.Equal(messageId.ToString(), second.BasicProperties.MessageId);
+
+            OutboxMessage? processed = null;
+            for (var i = 0; i < 40; i++)
+            {
+                await Task.Delay(250);
+                processed = await ReadAsync(messageId);
+                if (processed?.ProcessedAt is not null)
+                    break;
+            }
+
+            Assert.NotNull(processed);
+            Assert.NotNull(processed!.ProcessedAt);
+            Assert.Equal(1, processed.Attempts);
+        }
+        finally
+        {
+            await DeleteAsync(messageId);
+        }
+    }
+
+    private async Task<Guid> InsertProbeAsync(int attempts = 0)
+    {
+        var probeId = Guid.NewGuid();
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = probeId,
+                Type = "UnroutableProbe",
+                TenantId = Guid.NewGuid(),
+                Payload = "{}",
+                OccurredAt = DateTimeOffset.UtcNow,
+                Attempts = attempts
+            });
+            await db.SaveChangesAsync();
+        });
+        return probeId;
+    }
+
+    private async Task<OutboxMessage> WaitForAttemptAsync(Guid id)
+    {
+        for (var i = 0; i < 20; i++)
+        {
+            await Task.Delay(500);
+            var row = await ReadAsync(id);
+            if (row is { Attempts: > 0 })
+                return row;
+        }
+
+        throw new Xunit.Sdk.XunitException("the dispatcher never attempted the probe within 10s");
+    }
+
+    private Task DeleteAsync(Guid id) =>
+        WithDbAsync(db => db.OutboxMessages.Where(m => m.Id == id).ExecuteDeleteAsync());
+
+    private async Task<IConnection> CreateRabbitConnectionAsync()
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _factory.RabbitHost,
+            Port = _factory.RabbitPort,
+            UserName = "ticketing",
+            Password = "ticketing"
+        };
+        return await factory.CreateConnectionAsync();
+    }
+
+    private static async Task<BasicGetResult> WaitForDeliveryAsync(IChannel channel, string queue)
+    {
+        for (var i = 0; i < 60; i++)
+        {
+            var result = await channel.BasicGetAsync(queue, autoAck: true);
+            if (result is not null)
+                return result;
+            await Task.Delay(250);
+        }
+
+        throw new Xunit.Sdk.XunitException("the probe queue did not receive a publication within 15s");
     }
 
     private async Task<OutboxMessage?> ReadAsync(Guid id)

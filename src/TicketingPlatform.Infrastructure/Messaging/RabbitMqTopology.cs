@@ -1,4 +1,5 @@
 using RabbitMQ.Client;
+using TicketingPlatform.Application.Contracts;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
@@ -20,6 +21,9 @@ public static class RabbitMqTopology
     public const string AvailabilityProjectionQueue = "availability-projection";
     public const string TicketIssuerQueue = "ticket-issuer";
 
+    public static string RetryQueueName(string consumerQueue, string routingKey) =>
+        $"{consumerQueue}.retry.{routingKey}";
+
     public static async Task DeclareAsync(IChannel channel, RabbitMqOptions options, CancellationToken ct)
     {
         // Exchanges: the domain topic exchange and the fan-out dead-letter exchange.
@@ -32,17 +36,34 @@ public static class RabbitMqTopology
 
         var deadLetter = new Dictionary<string, object?> { ["x-dead-letter-exchange"] = options.DeadLetterExchange };
 
-        await DeclareBoundQueueAsync(channel, NotificationsQueue, options.Exchange, deadLetter, ct, "OrderConfirmed", "OrderRefunded");
-        await DeclareBoundQueueAsync(channel, AvailabilityProjectionQueue, options.Exchange, deadLetter, ct, "AvailabilityChanged");
-        await DeclareBoundQueueAsync(channel, TicketIssuerQueue, options.Exchange, deadLetter, ct, "OrderConfirmed");
+        await DeclareBoundQueueAsync(channel, NotificationsQueue, options, deadLetter, ct,
+            IntegrationEventNames.OrderConfirmed, IntegrationEventNames.OrderRefunded);
+        await DeclareBoundQueueAsync(channel, AvailabilityProjectionQueue, options, deadLetter, ct,
+            IntegrationEventNames.AvailabilityChanged);
+        await DeclareBoundQueueAsync(channel, TicketIssuerQueue, options, deadLetter, ct,
+            IntegrationEventNames.OrderConfirmed);
     }
 
-    private static async Task DeclareBoundQueueAsync(IChannel channel, string queue, string exchange,
+    private static async Task DeclareBoundQueueAsync(IChannel channel, string queue, RabbitMqOptions options,
         Dictionary<string, object?> arguments, CancellationToken ct, params string[] routingKeys)
     {
         await channel.QueueDeclareAsync(queue, durable: true, exclusive: false, autoDelete: false,
             arguments: arguments, cancellationToken: ct);
         foreach (var key in routingKeys)
-            await channel.QueueBindAsync(queue, exchange, routingKey: key, cancellationToken: ct);
+        {
+            await channel.QueueBindAsync(queue, options.Exchange, routingKey: key, cancellationToken: ct);
+
+            // One retry queue per consumer + event type prevents a TicketIssuer retry from
+            // fanning out to the Notification consumer. Expiry routes the same message back to
+            // the domain exchange under its original event key.
+            var retryArguments = new Dictionary<string, object?>
+            {
+                ["x-message-ttl"] = Math.Max(1, options.ConsumerRetryDelayMilliseconds),
+                ["x-dead-letter-exchange"] = options.Exchange,
+                ["x-dead-letter-routing-key"] = key
+            };
+            await channel.QueueDeclareAsync(RetryQueueName(queue, key), durable: true,
+                exclusive: false, autoDelete: false, arguments: retryArguments, cancellationToken: ct);
+        }
     }
 }

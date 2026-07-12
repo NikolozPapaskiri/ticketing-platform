@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -8,6 +6,7 @@ using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.ReadModels;
@@ -69,14 +68,10 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         };
 
         await using var connection = await factory.CreateConnectionAsync(ct);
-        await using var channel = await connection.CreateChannelAsync(cancellationToken: ct);
+        await using var channel = await connection.CreateChannelAsync(
+            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true), ct);
 
-        await channel.ExchangeDeclareAsync(_options.Exchange, ExchangeType.Topic, durable: true, cancellationToken: ct);
-        await channel.ExchangeDeclareAsync(_options.DeadLetterExchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
-        await channel.QueueDeclareAsync("availability-projection", durable: true, exclusive: false, autoDelete: false,
-            arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = _options.DeadLetterExchange },
-            cancellationToken: ct);
-        await channel.QueueBindAsync("availability-projection", _options.Exchange, routingKey: "AvailabilityChanged", cancellationToken: ct);
+        await RabbitMqTopology.DeclareAsync(channel, _options, ct);
 
         await channel.BasicQosAsync(0, prefetchCount: 1, global: false, ct);
 
@@ -90,18 +85,19 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Poison message {MessageId} in availability projection; dead-lettering", ea.BasicProperties.MessageId);
-                await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, ct);
+                await ConsumerRetryPolicy.HandleFailureAsync(channel, ea,
+                    RabbitMqTopology.AvailabilityProjectionQueue, ex, _options, _logger, ct);
             }
         };
 
-        await channel.BasicConsumeAsync("availability-projection", autoAck: false, consumer, ct);
+        await channel.BasicConsumeAsync(RabbitMqTopology.AvailabilityProjectionQueue, autoAck: false, consumer, ct);
         await Task.Delay(Timeout.InfiniteTimeSpan, ct);
     }
 
     private async Task HandleAsync(BasicDeliverEventArgs ea, CancellationToken ct)
     {
-        var messageId = Guid.Parse(ea.BasicProperties.MessageId!);
+        var envelope = IntegrationEventEnvelopeCodec.Read(ea);
+        var messageId = envelope.MessageId;
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
@@ -110,8 +106,8 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
             return; // at-least-once: seen it, skip it
 
-        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(ea.Body.Span));
-        var ticketTypeId = payload.RootElement.GetProperty("ticketTypeId").GetGuid();
+        var message = IntegrationEventEnvelopeCodec.ReadPayload<AvailabilityChangedIntegrationEvent>(envelope);
+        var ticketTypeId = message.TicketTypeId;
 
         // Re-read the LIVE truth (background scope has no tenant -> IgnoreQueryFilters).
         var truth = await db.TicketTypes
@@ -142,11 +138,23 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         view.Total = truth.Inventory.TotalQuantity;
         view.UpdatedAt = DateTimeOffset.UtcNow;
 
-        db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, Consumer = consumerName, ProcessedAt = DateTimeOffset.UtcNow });
-        await db.SaveChangesAsync(ct); // projection + dedupe mark in one transaction
+        // Persist the idempotent projection first, but do NOT mark the message processed yet.
+        // If SignalR is temporarily unavailable, the retry must execute the broadcast again.
+        await db.SaveChangesAsync(ct);
 
         // Push AFTER the commit - clients must never hear about state that then rolls back.
         var broadcaster = scope.ServiceProvider.GetRequiredService<IAvailabilityBroadcaster>();
         await broadcaster.BroadcastAsync(truth.EventId, ticketTypeId, view.Available, ct);
+
+        // Only now is the whole handler complete. A crash between the broadcast and this mark can
+        // produce a duplicate push on redelivery, which is safe because availability is absolute
+        // state rather than a delta. Missing the push would be worse than duplicating it.
+        db.ProcessedMessages.Add(new ProcessedMessage
+        {
+            MessageId = messageId,
+            Consumer = consumerName,
+            ProcessedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
     }
 }

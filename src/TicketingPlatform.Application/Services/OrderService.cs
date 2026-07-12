@@ -233,16 +233,14 @@ public sealed class OrderService
             order.Hold.ConfirmFromPayment(now);
 
         // Staged into the SAME transaction as the order + hold changes (the outbox pattern).
-        _outbox.Add("OrderConfirmed", new
-        {
-            OrderId = order.Id,
+        _outbox.Add(new OrderConfirmedIntegrationEvent(
             order.TenantId,
+            order.Id,
             order.Hold.TicketTypeId,
             order.Hold.Quantity,
             order.CustomerEmail,
             order.Amount,
-            order.Currency
-        });
+            order.Currency));
         idempotency?.Complete(now);
     }
 
@@ -260,7 +258,8 @@ public sealed class OrderService
             {
                 hold.ExpireFromPayment(now);
                 hold.TicketType.Inventory.Release(hold.Quantity); // no retry window left: give the seat back
-                _outbox.Add("AvailabilityChanged", new { hold.TenantId, hold.TicketType.EventId, hold.TicketTypeId });
+                _outbox.Add(new AvailabilityChangedIntegrationEvent(
+                    hold.TenantId, hold.TicketType.EventId, hold.TicketTypeId));
             }
         }
         idempotency?.Complete(now);
@@ -383,21 +382,15 @@ public sealed class OrderService
         ticket?.Void(now);
         order.Hold.TicketType.Inventory.Release(order.Hold.Quantity); // credit the seat back, once
 
-        _outbox.Add("AvailabilityChanged", new
-        {
-            TenantId = tenantId,
-            order.Hold.TicketType.EventId,
-            order.Hold.TicketTypeId
-        });
-        _outbox.Add("OrderRefunded", new
-        {
-            OrderId = order.Id,
-            TenantId = tenantId,
-            RefundedByActor = actorKey, // the initiating actor, for audit
+        _outbox.Add(new AvailabilityChangedIntegrationEvent(
+            tenantId, order.Hold.TicketType.EventId, order.Hold.TicketTypeId));
+        _outbox.Add(new OrderRefundedIntegrationEvent(
+            tenantId,
+            order.Id,
+            actorKey,
             order.CustomerEmail,
             order.Amount,
-            order.Currency
-        });
+            order.Currency));
 
         if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
         {

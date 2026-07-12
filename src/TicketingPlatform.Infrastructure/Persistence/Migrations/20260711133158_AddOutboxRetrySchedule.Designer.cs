@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TicketingPlatform.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using TicketingPlatform.Infrastructure.Persistence;
 namespace TicketingPlatform.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(TicketingDbContext))]
-    partial class TicketingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260711133158_AddOutboxRetrySchedule")]
+    partial class AddOutboxRetrySchedule
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -516,10 +519,6 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
                     b.Property<int>("Attempts")
                         .HasColumnType("integer");
 
-                    b.Property<string>("CorrelationId")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
                     b.Property<DateTimeOffset?>("FailedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -546,14 +545,6 @@ namespace TicketingPlatform.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("ProcessedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("SchemaVersion")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(1);
-
-                    b.Property<Guid?>("TenantId")
-                        .HasColumnType("uuid");
 
                     b.Property<string>("TraceParent")
                         .HasColumnType("text");

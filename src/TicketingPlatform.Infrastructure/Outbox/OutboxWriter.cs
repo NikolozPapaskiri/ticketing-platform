@@ -23,16 +23,20 @@ public sealed class OutboxWriter : IOutbox
         _clock = clock;
     }
 
-    public void Add(string type, object payload)
+    public void Add(IIntegrationEvent message)
     {
+        var activity = System.Diagnostics.Activity.Current;
         _db.OutboxMessages.Add(new OutboxMessage
         {
             Id = Guid.NewGuid(),
-            Type = type,
-            Payload = JsonSerializer.Serialize(payload, Json),
+            Type = message.EventType,
+            SchemaVersion = message.SchemaVersion,
+            TenantId = message.TenantId,
+            CorrelationId = activity?.TraceId.ToString(),
+            Payload = JsonSerializer.Serialize(message, message.GetType(), Json),
             OccurredAt = _clock.GetUtcNow(),
             // Capture the current trace so the dispatcher can continue it (see OutboxMessage docs).
-            TraceParent = System.Diagnostics.Activity.Current?.Id
+            TraceParent = activity?.Id
         });
     }
 }

@@ -377,7 +377,7 @@ Required tests for every reservation strategy:
 
 ## PR 3: RabbitMQ publication and consumer reliability
 
-**Status: IN PROGRESS — the P0 (no silent event loss) is DONE** on branch
+**Status: IN PROGRESS — publication, retry, and versioned contracts are DONE** on branch
 `feature/rabbitmq-delivery-safety`: a `RabbitMqTopologyInitializer` declares the exchange, DLX,
 and every consumer queue + binding as a plain `IHostedService` whose `StartAsync` completes
 BEFORE the dispatcher starts (§3.1), and the dispatcher now publishes with **publisher confirms +
@@ -385,14 +385,41 @@ tracking** and `mandatory: true`, marking a row processed only after the broker 
 returned/unconfirmed message in the outbox for retry (§3.2). Shared `RabbitMqTopology` is the one
 source of truth; this also fixed a latent bug — `OrderRefunded` had **no binding** and was being
 silently dropped, so it is now routed to `notifications` (which handles both confirm and refund).
-Test `Outbox_UnroutableMessage_RemainsUnprocessed`; 141 tests green.
 
-**Still open (PR 3 tail):** §3.3 bounded transient consumer retries (retry queue with TTL +
-attempt cap before dead-lettering, instead of dead-lettering on the first exception); §3.4
-versioned integration-event envelopes replacing anonymous JSON; and the remaining §3.5 tests
-(`Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage`, `Consumer_TransientFailure_RetriesThen
-Succeeds`, `Consumer_InvalidPayload_DeadLettersWithoutInfiniteLoop`, the duplicate-delivery
-ticket-issuer test, and an explicit topology-ready test).
+The dispatcher also has persistent exponential retry scheduling (`NextAttemptAt`), a configurable
+attempt budget, and operator-visible quarantine (`FailedAt` + `LastError`) instead of hot-looping
+an unroutable row. Consumers share one failure policy: malformed payloads dead-letter immediately;
+transient failures publish with confirms to durable per-consumer/per-event TTL retry queues, carry
+an attempt header, and park after the configured total-attempt bound. Per-event retry queues avoid
+fan-out contamination when two consumers subscribe to `OrderConfirmed`. The availability
+projection records dedupe only after its SignalR side effect, so a transient broadcast failure is
+actually retried (a duplicate absolute-state push after a crash is safe). Tests cover outbox
+backoff/quarantine, transient recovery, bounded exhaustion, and poison payloads.
+
+Integration events now cross the Application boundary as typed `IIntegrationEvent` records rather
+than `(string, anonymous object)`. The outbox persists schema version, tenant, correlation, and
+trace metadata. The dispatcher wraps the typed payload in a stable envelope containing
+`messageId`, `eventType`, `schemaVersion`, `occurredAt`, `tenantId`, `correlationId`, and `payload`.
+Consumers verify that envelope identity matches AMQP `MessageId` and the routing key before they
+deserialize a typed payload or perform a side effect. Unsupported versions and invalid contracts
+are poison; old pending outbox rows remain publishable because tenant metadata can be recovered
+from the legacy payload. 149 backend tests are green (60 unit + 89 integration) against real
+PostgreSQL, Redis, and RabbitMQ.
+
+The dispatcher’s broker transport is isolated behind `IOutboxPublisher`. A deterministic test
+injects one pre-confirm transport loss, proves the claimed row remains unprocessed with its same
+message ID, and then proves the real publisher delivers it after the configurable claim lease
+expires. `OutboxLockSeconds` remains 30 seconds in production and is shortened only by the test
+factory. The broker-interruption failure window is therefore covered without timing-dependent
+container restarts.
+
+The complementary post-confirm crash test proves at-least-once delivery rather than exactly-once:
+RabbitMQ receives the first copy, a simulated process loss prevents `ProcessedAt` from being saved,
+and the same outbox row publishes a second copy after its lease expires. Both broker copies carry
+the same `MessageId`; downstream per-consumer dedupe is the mechanism that makes this safe.
+
+**Still open (PR 3 tail):** the remaining §3.5 tests
+(the duplicate-delivery ticket-issuer test and an explicit topology-ready test).
 
 Suggested branch: `feature/rabbitmq-delivery-safety`
 
@@ -676,21 +703,15 @@ For each milestone, demonstrate:
 
 ## Immediate next actions
 
-Start with PR 1 only.
+Finish the PR 3 failure-window evidence, then move to PR 4.
 
-1. Create `feature/payment-state-safety`.
-2. Write the final hold/order transition table and explain it aloud before changing entities.
-3. Add a controllable payment-provider barrier to the integration-test infrastructure.
-4. Write `ConcurrentCheckout_SameHold_ChargesExactlyOnce` and prove it fails against the current
-   code.
-5. Write `Checkout_WhenPaymentCrossesHoldExpiry_DoesNotReleaseSoldInventory` and prove it fails.
-6. Add the post-provider-success database fault injection and prove that the current idempotency
-   record becomes stuck.
-7. Only after the failures are reproducible, add `PaymentPending`, the lease fields, the stable
-   pending order, and the partial unique index.
-8. Implement the two-transaction checkout flow and provider reconciliation.
-9. Run the completion gate. Do not begin PR 2 while any payment ambiguity can release inventory
-   or create a second charge.
-
-The first coding session should stop after steps 3 through 6 if the failing tests are not yet
-deterministic. Deterministic reproduction is part of the milestone, not setup overhead.
+1. Add a controllable broker interruption immediately before publisher confirmation and prove the
+   same outbox message is retried without being marked processed early.
+2. Add the publish-confirmed/process-crash-before-`ProcessedAt` duplicate-delivery test.
+3. Deliver the same `OrderConfirmed` concurrently to the ticket issuer and prove one matching
+   database ticket/file credential is produced.
+4. Add an explicit startup test proving all main, retry, and dead-letter queues exist before the
+   first dispatch.
+5. Add backlog, retry, return, confirmation, and DLQ metrics required by the PR 3 completion gate.
+6. Close PR 3 only after the full Docker-backed suite and migration check are green.
+7. Start PR 4 with deterministic waiting-room pop/grant crash and multi-replica admission tests.

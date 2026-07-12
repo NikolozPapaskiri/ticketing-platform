@@ -18,11 +18,29 @@ public class OutboxMessage
     /// <summary>JSON payload of the event.</summary>
     public required string Payload { get; set; }
 
+    /// <summary>Version of the payload contract, independent from the envelope format.</summary>
+    public int SchemaVersion { get; set; } = 1;
+
+    /// <summary>Tenant copied to envelope metadata; nullable only for rows created before migration.</summary>
+    public Guid? TenantId { get; set; }
+
+    /// <summary>Stable trace correlation id captured when the outbox row is created.</summary>
+    public string? CorrelationId { get; set; }
+
     public DateTimeOffset OccurredAt { get; set; }
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }
     public DateTimeOffset? LockedUntil { get; set; }
     public string? LockedBy { get; set; }
+
+    /// <summary>Earliest time the dispatcher may retry this row after a failed publication.</summary>
+    public DateTimeOffset? NextAttemptAt { get; set; }
+
+    /// <summary>Set when the configured publish-attempt budget is exhausted.</summary>
+    public DateTimeOffset? FailedAt { get; set; }
+
+    /// <summary>Last broker failure retained for operator diagnosis; never contains the payload.</summary>
+    public string? LastError { get; set; }
 
     /// <summary>
     /// W3C traceparent of the request that produced this event. The dispatcher polls outside

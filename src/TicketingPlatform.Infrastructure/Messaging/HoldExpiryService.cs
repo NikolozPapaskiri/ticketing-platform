@@ -2,11 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Common;
+using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Domain;
-using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
@@ -25,8 +24,6 @@ namespace TicketingPlatform.Infrastructure.Messaging;
 /// </summary>
 public sealed class HoldExpiryService : BackgroundService
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-
     private readonly IServiceScopeFactory _scopes;
     private readonly HoldOptions _options;
     private readonly TimeProvider _clock;
@@ -66,6 +63,7 @@ public sealed class HoldExpiryService : BackgroundService
     {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutbox>();
         var now = _clock.GetUtcNow();
 
         var expired = await db.Holds
@@ -86,18 +84,8 @@ public sealed class HoldExpiryService : BackgroundService
 
             // Announce through the outbox like every other availability change - the projection
             // consumer treats create/release/expiry identically (it re-reads live truth).
-            db.OutboxMessages.Add(new OutboxMessage
-            {
-                Id = Guid.NewGuid(),
-                Type = "AvailabilityChanged",
-                Payload = JsonSerializer.Serialize(new
-                {
-                    hold.TenantId,
-                    hold.TicketType.EventId,
-                    hold.TicketTypeId
-                }, Json),
-                OccurredAt = now
-            });
+            outbox.Add(new AvailabilityChangedIntegrationEvent(
+                hold.TenantId, hold.TicketType.EventId, hold.TicketTypeId));
         }
 
         try
