@@ -583,6 +583,28 @@ There must be no crash window between queue removal and admission creation.
 - Admission reuse and queue-position abuse have explicit bounds.
 - Polling and SignalR remain fallback-compatible.
 
+### 4.6 Noted follow-up (queue-integrity hardening, not required by the gate)
+
+PR 4 makes the admission *credential* fully server-controlled: the grant is issued only by the
+admitter, event-bound, customer-bound on first use, quota-limited, and TTL'd, and anonymous joins
+are per-client rate-limited. That satisfies the gate ("a leaked GUID alone is insufficient to
+reserve"). The visitor GUID that stands in the queue line remains client-generated — it is only an
+opaque slot label, not an authorization token.
+
+A future, separately-scoped PR could replace that client-chosen slot label with a **server-minted,
+HMAC-signed join token** (stateless verification, no extra Redis round-trip; carries `eventId`,
+`issuedAt`, and a nonce) so the slot identity itself is tamper-evident and cannot be bulk-forged.
+The marginal security value over PR 4 is **queue integrity / Sybil resistance** (making it harder
+for a scalper to mint many legitimate-looking positions), not admission safety — and a signed token
+alone does not stop a botnet spread across many IPs. To actually raise the cost of mass queue entry
+it must be paired with a **join-time challenge** (CAPTCHA or lightweight proof-of-work) or
+authenticated queue entry for high-risk events, per §4.3's open question.
+
+This is deliberately deferred: it requires a frontend contract change (the client must store and
+replay the server-issued token across join → status → hold) plus signing-key management/rotation,
+and it addresses a distinct threat from the ones PR 4 closes. Bundle it with §6 ops work or fold it
+into a dedicated anti-abuse PR when the marketplace threat model justifies the added surface.
+
 ---
 
 ## PR 5: Authentication session concurrency and proxy-aware rate limiting
