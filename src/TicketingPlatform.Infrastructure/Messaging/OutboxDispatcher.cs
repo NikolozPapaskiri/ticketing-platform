@@ -22,22 +22,23 @@ namespace TicketingPlatform.Infrastructure.Messaging;
 public sealed class OutboxDispatcher : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan LockDuration = TimeSpan.FromSeconds(30);
     private const int BatchSize = 20;
 
     private readonly IServiceScopeFactory _scopes;
     private readonly RabbitMqOptions _options;
+    private readonly IOutboxPublisher _publisher;
     private readonly ILogger<OutboxDispatcher> _logger;
 
-    private IConnection? _connection;
-    private IChannel? _channel;
     private readonly string _workerId = $"{Environment.MachineName}:{Guid.NewGuid():N}";
     private int MaxAttempts => Math.Max(1, _options.OutboxMaxAttempts);
+    private TimeSpan LockDuration => TimeSpan.FromSeconds(Math.Max(1, _options.OutboxLockSeconds));
 
-    public OutboxDispatcher(IServiceScopeFactory scopes, IOptions<RabbitMqOptions> options, ILogger<OutboxDispatcher> logger)
+    public OutboxDispatcher(IServiceScopeFactory scopes, IOptions<RabbitMqOptions> options,
+        IOutboxPublisher publisher, ILogger<OutboxDispatcher> logger)
     {
         _scopes = scopes;
         _options = options.Value;
+        _publisher = publisher;
         _logger = logger;
     }
 
@@ -57,9 +58,8 @@ public sealed class OutboxDispatcher : BackgroundService
             catch (Exception ex)
             {
                 // Broker down / DB blip: log, back off, keep living. A dispatcher that dies
-                // silently strands every event in the outbox. EnsureChannelAsync disposes and
-                // rebuilds the broken channel on the next tick (the claim's lock expires so the
-                // unconfirmed rows are re-dispatched).
+                // silently strands every event in the outbox. The publisher rebuilds a broken
+                // connection/channel on the next tick; an unconfirmed claim expires for retry.
                 _logger.LogError(ex, "Outbox dispatch failed; retrying shortly");
                 try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
                 catch (OperationCanceledException) { break; }
@@ -76,8 +76,6 @@ public sealed class OutboxDispatcher : BackgroundService
 
         if (batch.Count == 0)
             return;
-
-        var channel = await EnsureChannelAsync(ct);
 
         var confirmed = 0;
         foreach (var message in batch)
@@ -106,13 +104,7 @@ public sealed class OutboxDispatcher : BackgroundService
                 // message (no binding) is RETURNED and surfaces as a PublishException instead of
                 // being silently dropped. A row is marked processed ONLY after that confirmation -
                 // the outbox never lies about delivery.
-                await channel.BasicPublishAsync(
-                    exchange: _options.Exchange,
-                    routingKey: message.Type,
-                    mandatory: true,
-                    basicProperties: properties,
-                    body: body,
-                    cancellationToken: ct);
+                await _publisher.PublishAsync(message.Type, properties, body, ct);
 
                 message.ProcessedAt = DateTimeOffset.UtcNow;
                 message.Attempts++;
@@ -220,40 +212,4 @@ public sealed class OutboxDispatcher : BackgroundService
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength];
 
-    private async Task<IChannel> EnsureChannelAsync(CancellationToken ct)
-    {
-        if (_channel is { IsOpen: true })
-            return _channel;
-
-        // Dispose a broken channel/connection rather than just dropping the reference.
-        if (_channel is not null) await _channel.DisposeAsync();
-        if (_connection is not null) await _connection.DisposeAsync();
-        _channel = null;
-        _connection = null;
-
-        var factory = new ConnectionFactory
-        {
-            HostName = _options.HostName,
-            Port = _options.Port,
-            UserName = _options.UserName,
-            Password = _options.Password
-        };
-
-        _connection = await factory.CreateConnectionAsync(ct);
-        // Publisher confirms WITH tracking: BasicPublishAsync then awaits the broker's ack and
-        // throws on nack/return, which is what lets us mark rows processed only when truly durable.
-        _channel = await _connection.CreateChannelAsync(
-            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
-            ct);
-        // Defensive re-declare; the topology initializer already declared everything at startup.
-        await RabbitMqTopology.DeclareAsync(_channel, _options, ct);
-        return _channel;
-    }
-
-    public override void Dispose()
-    {
-        _channel?.Dispose();
-        _connection?.Dispose();
-        base.Dispose();
-    }
 }

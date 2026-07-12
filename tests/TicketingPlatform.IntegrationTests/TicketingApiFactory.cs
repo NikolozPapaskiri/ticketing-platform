@@ -8,6 +8,7 @@ using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
 using Testcontainers.Redis;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Infrastructure.Messaging;
 using TicketingPlatform.Infrastructure.Persistence;
 using WireMock.Server;
 
@@ -49,6 +50,7 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
         // rather than retried by every one-second dispatcher poll.
         builder.UseSetting("RabbitMq:OutboxRetryBaseSeconds", "30");
         builder.UseSetting("RabbitMq:OutboxMaxAttempts", "2");
+        builder.UseSetting("RabbitMq:OutboxLockSeconds", "2");
         builder.UseSetting("RabbitMq:ConsumerRetryDelayMilliseconds", "500");
         builder.UseSetting("RabbitMq:ConsumerMaxAttempts", "3");
         builder.UseSetting("PaymentProvider:BaseUrl", PaymentProvider.Urls[0] + "/");
@@ -62,6 +64,9 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
             services.RemoveAll<IFileStorage>();
             services.AddSingleton<TransientFileStorage>();
             services.AddSingleton<IFileStorage>(sp => sp.GetRequiredService<TransientFileStorage>());
+            services.RemoveAll<IOutboxPublisher>();
+            services.AddSingleton<FailOnceOutboxPublisher>();
+            services.AddSingleton<IOutboxPublisher>(sp => sp.GetRequiredService<FailOnceOutboxPublisher>());
         });
         builder.UseEnvironment("Development");
     }

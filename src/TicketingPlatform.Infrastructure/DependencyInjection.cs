@@ -44,6 +44,8 @@ public static class DependencyInjection
         // Declare the broker topology BEFORE the dispatcher/consumers start, so no publish can
         // race ahead of its bindings. Registered first => its StartAsync completes first.
         services.AddHostedService<RabbitMqTopologyInitializer>();
+        services.AddSingleton<RabbitMqOutboxPublisher>();
+        services.AddSingleton<IOutboxPublisher>(sp => sp.GetRequiredService<RabbitMqOutboxPublisher>());
         services.AddHostedService<OutboxDispatcher>();
         services.AddHostedService<NotificationConsumer>();
         services.AddHostedService<HoldExpiryService>();

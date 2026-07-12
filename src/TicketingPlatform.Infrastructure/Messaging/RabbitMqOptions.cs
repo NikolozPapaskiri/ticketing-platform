@@ -21,6 +21,9 @@ public sealed class RabbitMqOptions
     /// <summary>Maximum publish attempts before the row is quarantined for operator action.</summary>
     public int OutboxMaxAttempts { get; init; } = 10;
 
+    /// <summary>How long one dispatcher replica owns a claimed outbox row after a broker fault.</summary>
+    public int OutboxLockSeconds { get; init; } = 30;
+
     /// <summary>Delay applied by each consumer's durable retry queue.</summary>
     public int ConsumerRetryDelayMilliseconds { get; init; } = 5000;
 

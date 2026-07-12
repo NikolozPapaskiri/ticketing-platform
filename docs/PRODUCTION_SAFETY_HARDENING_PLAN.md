@@ -406,8 +406,15 @@ are poison; old pending outbox rows remain publishable because tenant metadata c
 from the legacy payload. 149 backend tests are green (60 unit + 89 integration) against real
 PostgreSQL, Redis, and RabbitMQ.
 
+The dispatcher’s broker transport is isolated behind `IOutboxPublisher`. A deterministic test
+injects one pre-confirm transport loss, proves the claimed row remains unprocessed with its same
+message ID, and then proves the real publisher delivers it after the configurable claim lease
+expires. `OutboxLockSeconds` remains 30 seconds in production and is shortened only by the test
+factory. The broker-interruption failure window is therefore covered without timing-dependent
+container restarts.
+
 **Still open (PR 3 tail):** the remaining §3.5 tests
-(`Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage`, the duplicate-delivery ticket-issuer
+(`Outbox_PublishBeforeProcessedCrash_DeliversAtLeastOnce`, the duplicate-delivery ticket-issuer
 test, and an explicit topology-ready test).
 
 Suggested branch: `feature/rabbitmq-delivery-safety`

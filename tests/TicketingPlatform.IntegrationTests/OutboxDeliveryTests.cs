@@ -193,6 +193,65 @@ public sealed class OutboxDeliveryTests
         await DeleteAsync(messageId);
     }
 
+    [Fact]
+    public async Task Outbox_BrokerDisconnectBeforeConfirm_RetriesSameMessage()
+    {
+        _factory.Services.GetRequiredService<FailOnceOutboxPublisher>().FailNextPublish();
+        var messageId = Guid.NewGuid();
+        await WithDbAsync(async db =>
+        {
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Id = messageId,
+                Type = "AvailabilityChanged",
+                TenantId = Guid.NewGuid(),
+                Payload = JsonSerializer.Serialize(new
+                {
+                    eventId = Guid.NewGuid(),
+                    ticketTypeId = Guid.NewGuid()
+                }),
+                OccurredAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        });
+
+        try
+        {
+            // The test publisher injects a connection-loss equivalent before RabbitMQ can confirm
+            // the first send. The row must remain unprocessed and become claimable after its short
+            // test lease expires; the real publisher then sends the original message id.
+            OutboxMessage? claimed = null;
+            for (var i = 0; i < 20; i++)
+            {
+                await Task.Delay(250);
+                claimed = await ReadAsync(messageId);
+                if (claimed?.LockedUntil is not null)
+                    break;
+            }
+
+            Assert.NotNull(claimed);
+            Assert.Null(claimed!.ProcessedAt);
+            Assert.Equal(0, claimed.Attempts);
+
+            OutboxMessage? processed = null;
+            for (var i = 0; i < 40; i++)
+            {
+                await Task.Delay(250);
+                processed = await ReadAsync(messageId);
+                if (processed?.ProcessedAt is not null)
+                    break;
+            }
+
+            Assert.NotNull(processed);
+            Assert.NotNull(processed!.ProcessedAt);
+            Assert.Equal(1, processed.Attempts);
+        }
+        finally
+        {
+            await DeleteAsync(messageId);
+        }
+    }
+
     private async Task<Guid> InsertProbeAsync(int attempts = 0)
     {
         var probeId = Guid.NewGuid();
