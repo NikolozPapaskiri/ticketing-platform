@@ -15,6 +15,13 @@ public class RefreshToken
     public Guid UserId { get; set; }
     public User User { get; set; } = null!;
 
+    /// <summary>
+    /// Groups a rotation chain (one login = one family). Reuse detection and logout revoke by
+    /// FAMILY, so a compromise or sign-out on one device leaves other devices' sessions alone -
+    /// unlike revoking every token the user owns.
+    /// </summary>
+    public Guid FamilyId { get; set; }
+
     public required string TokenHash { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }

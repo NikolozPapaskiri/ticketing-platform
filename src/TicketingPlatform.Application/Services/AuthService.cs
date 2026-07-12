@@ -7,9 +7,10 @@ using TicketingPlatform.Domain;
 namespace TicketingPlatform.Application.Services;
 
 /// <summary>
-/// Authentication use cases: register, login, refresh-token rotation with reuse detection.
-/// Access tokens are short-lived stateless JWTs; refresh tokens are long-lived, stored hashed
-/// server-side, and revocable - which is the honest answer to "how do you revoke a JWT".
+/// Authentication use cases: register, login, refresh-token rotation with reuse detection, and
+/// server-side logout. Access tokens are short-lived stateless JWTs; refresh tokens are
+/// long-lived, stored hashed server-side, family-scoped, and revocable - which is the honest
+/// answer to "how do you revoke a JWT".
 /// </summary>
 public sealed class AuthService
 {
@@ -21,6 +22,7 @@ public sealed class AuthService
     private readonly IPasswordHasherService _hasher;
     private readonly IJwtTokenGenerator _jwt;
     private readonly TimeProvider _clock;
+    private readonly TimeSpan _rotationGrace;
 
     public AuthService(
         IUserRepository users,
@@ -28,7 +30,8 @@ public sealed class AuthService
         ITenantRepository tenants,
         IPasswordHasherService hasher,
         IJwtTokenGenerator jwt,
-        TimeProvider clock)
+        TimeProvider clock,
+        AuthSessionOptions options)
     {
         _users = users;
         _refreshTokens = refreshTokens;
@@ -36,6 +39,7 @@ public sealed class AuthService
         _hasher = hasher;
         _jwt = jwt;
         _clock = clock;
+        _rotationGrace = TimeSpan.FromSeconds(Math.Max(0, options.RefreshRotationGraceSeconds));
     }
 
     /// <summary>Self-service registration is always a Customer - roles are never client-chosen.</summary>
@@ -85,55 +89,93 @@ public sealed class AuthService
         if (user is null || !_hasher.Verify(user, user.PasswordHash, request.Password))
             return Result<AuthResponse>.Unauthorized("Invalid credentials.");
 
-        return Result<AuthResponse>.Success(await IssueTokenPairAsync(user, ct));
+        // A login starts a brand-new session family (this device/browser).
+        return Result<AuthResponse>.Success(await IssueTokenAsync(user, Guid.NewGuid(), ct));
     }
 
     public async Task<Result<AuthResponse>> RefreshAsync(RefreshRequest request, CancellationToken ct)
     {
         var now = _clock.GetUtcNow();
-        var stored = await _refreshTokens.GetByHashAsync(HashToken(request.RefreshToken), ct);
+        var parentHash = HashToken(request.RefreshToken);
+        var stored = await _refreshTokens.GetByHashAsync(parentHash, ct);
 
         if (stored is null)
             return Result<AuthResponse>.Unauthorized("Invalid refresh token.");
 
-        // REUSE DETECTION: a token that exists but is no longer active was already rotated or
-        // revoked. Someone is replaying it (the legitimate client holds the newer one), so the
-        // entire family is revoked - both the thief's copy and the stolen session die together.
-        if (!stored.IsActive(now))
+        // ROTATION: the single caller that wins the atomic claim rotates the token and gets the
+        // new pair. Everyone else either lost a concurrent race (handled by the grace window
+        // below) or is replaying an already-rotated token.
+        if (stored.IsActive(now))
         {
-            foreach (var token in await _refreshTokens.GetActiveForUserAsync(stored.UserId, ct))
-                token.Revoke(now);
-            await _refreshTokens.SaveChangesAsync(ct);
-            return Result<AuthResponse>.Unauthorized("Invalid refresh token.");
+            var raw = NewRawToken();
+            var child = NewToken(stored.UserId, stored.FamilyId, HashToken(raw), now);
+            if (await _refreshTokens.TryRotateAsync(parentHash, child, now, ct))
+            {
+                var (accessToken, expiresAt) = _jwt.Generate(stored.User);
+                return Result<AuthResponse>.Success(new AuthResponse(accessToken, expiresAt, raw));
+            }
+
+            // Lost the claim to a concurrent refresh: re-read the now-rotated parent so the grace
+            // logic below can tell a legitimate parallel request apart from a real replay.
+            stored = await _refreshTokens.GetByHashAsync(parentHash, ct);
+            if (stored is null)
+                return Result<AuthResponse>.Unauthorized("Invalid refresh token.");
         }
 
-        // ROTATION: every refresh replaces the token; the old one can never be used again.
-        var response = await IssueTokenPairAsync(stored.User, ct, beforeSave: newHash => stored.Revoke(now, newHash));
-        return Result<AuthResponse>.Success(response);
+        // Past here the presented token is not active: rotated (grace or theft), revoked by
+        // logout, or simply expired. Only a ROTATED token (linked to a successor) can be a
+        // legitimate concurrent refresh; a logout-revoked token has no successor link.
+        var wasRotated = stored.RevokedAt is not null && stored.ReplacedByTokenHash is not null;
+
+        // GRACE: a rotated token replayed within the window is a legitimate concurrent or
+        // near-concurrent refresh (two parallel BFF requests, possibly on different replicas,
+        // carrying the same cookie). Issue a sibling in the SAME family; do NOT cry theft.
+        if (wasRotated && now - stored.RevokedAt!.Value < _rotationGrace)
+            return Result<AuthResponse>.Success(await IssueTokenAsync(stored.User, stored.FamilyId, ct));
+
+        // REUSE DETECTION: a rotated token replayed OUTSIDE the grace window means the real token
+        // leaked (the legitimate client holds the newer one). Revoke the whole family so the
+        // thief's copy and the stolen session die together - but only THIS family, not the user's
+        // other devices.
+        if (wasRotated)
+            await _refreshTokens.RevokeFamilyAsync(stored.FamilyId, now, ct);
+
+        return Result<AuthResponse>.Unauthorized("Invalid refresh token.");
     }
 
-    private async Task<AuthResponse> IssueTokenPairAsync(User user, CancellationToken ct, Action<string>? beforeSave = null)
+    /// <summary>Server-side sign-out: kills the whole family so no rotated sibling survives. Idempotent.</summary>
+    public async Task LogoutAsync(RefreshRequest request, CancellationToken ct)
+    {
+        var stored = await _refreshTokens.GetByHashAsync(HashToken(request.RefreshToken), ct);
+        if (stored is null)
+            return; // unknown/garbage token: nothing to revoke, and we reveal nothing
+
+        await _refreshTokens.RevokeFamilyAsync(stored.FamilyId, _clock.GetUtcNow(), ct);
+    }
+
+    private async Task<AuthResponse> IssueTokenAsync(User user, Guid familyId, CancellationToken ct)
     {
         var (accessToken, expiresAt) = _jwt.Generate(user);
 
-        // 64 random bytes, opaque to the client; only the SHA-256 goes to the database.
-        var rawRefreshToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
-        var refreshHash = HashToken(rawRefreshToken);
-        var now = _clock.GetUtcNow();
-
-        beforeSave?.Invoke(refreshHash);
-        _refreshTokens.Add(new RefreshToken
-        {
-            Id = Guid.NewGuid(),
-            UserId = user.Id,
-            TokenHash = refreshHash,
-            CreatedAt = now,
-            ExpiresAt = now.Add(RefreshTokenLifetime)
-        });
+        var raw = NewRawToken();
+        _refreshTokens.Add(NewToken(user.Id, familyId, HashToken(raw), _clock.GetUtcNow()));
         await _refreshTokens.SaveChangesAsync(ct);
 
-        return new AuthResponse(accessToken, expiresAt, rawRefreshToken);
+        return new AuthResponse(accessToken, expiresAt, raw);
     }
+
+    private static RefreshToken NewToken(Guid userId, Guid familyId, string tokenHash, DateTimeOffset now) => new()
+    {
+        Id = Guid.NewGuid(),
+        UserId = userId,
+        FamilyId = familyId,
+        TokenHash = tokenHash,
+        CreatedAt = now,
+        ExpiresAt = now.Add(RefreshTokenLifetime)
+    };
+
+    // 64 random bytes, opaque to the client; only the SHA-256 hash is ever stored.
+    private static string NewRawToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
 
     private static User NewUser(string email, string normalized, UserRole role, Guid? tenantId) => new()
     {

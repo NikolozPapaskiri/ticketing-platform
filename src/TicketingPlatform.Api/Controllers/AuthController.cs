@@ -89,4 +89,14 @@ public class AuthController : ControllerBase
             ? Ok(result.Value)
             : Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication failed", detail: result.Message);
     }
+
+    /// <summary>Server-side sign-out: revokes the refresh token's whole family. Always 204 (idempotent,
+    /// and it must not reveal whether the presented token was valid).</summary>
+    [HttpPost("logout")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Logout(RefreshRequest request, CancellationToken ct)
+    {
+        await _auth.LogoutAsync(request, ct);
+        return NoContent();
+    }
 }

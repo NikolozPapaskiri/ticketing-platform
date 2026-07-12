@@ -1,0 +1,43 @@
+# The single ingest point. The app pushes OTLP (metrics + traces + logs) here; the collector fans
+# them out to Prometheus (scrapes the exposed :8889), Tempo (traces), and Loki (logs).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Prometheus scrapes this endpoint. Keep OTel names close to the source (dots -> underscores,
+  # no unit/_total mangling) so dashboard queries are predictable, and surface service.name as a
+  # label so the API and worker are distinguishable.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    add_metric_suffixes: false
+    resource_to_telemetry_conversion:
+      enabled: true
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]

@@ -1,8 +1,11 @@
+using Amazon.Runtime;
+using Amazon.S3;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using TicketingPlatform.Application.Abstractions;
+using TicketingPlatform.Application.Common;
 using TicketingPlatform.Infrastructure.Caching;
 using TicketingPlatform.Infrastructure.Documents;
 using TicketingPlatform.Infrastructure.Messaging;
@@ -25,6 +28,12 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        // Same image, different profile: the background workers run only on a role that runs
+        // workers (All/Worker), so scaling the API's HTTP replicas cannot multiply admission
+        // valves or scheduled jobs. API-only pods register none of them.
+        var role = HostRoleExtensions.ParseHostRole(configuration["Hosting:Role"]);
+        var runsWorkers = role.RunsWorkers();
+
         services.AddDbContext<TicketingDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("Default")));
 
@@ -38,27 +47,38 @@ public static class DependencyInjection
         services.AddScoped<IOrderRepository, OrderRepository>();
 
         // The outbox writer stages events through the caller's scoped DbContext (one transaction);
-        // the dispatcher + consumer + expiry service run as hosted background services.
+        // it runs on the API too (checkout writes rows). The dispatcher/consumers that PUBLISH and
+        // CONSUME from the broker are worker-only.
         services.AddScoped<IOutbox, OutboxWriter>();
         services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
-        // Declare the broker topology BEFORE the dispatcher/consumers start, so no publish can
-        // race ahead of its bindings. Registered first => its StartAsync completes first.
-        services.AddHostedService<RabbitMqTopologyInitializer>();
         services.AddSingleton<RabbitMqOutboxPublisher>();
         services.AddSingleton<IOutboxPublisher>(sp => sp.GetRequiredService<RabbitMqOutboxPublisher>());
-        services.AddHostedService<OutboxDispatcher>();
-        services.AddHostedService<NotificationConsumer>();
-        services.AddHostedService<HoldExpiryService>();
-        services.AddHostedService<PaymentReconciliationService>();
+        if (runsWorkers)
+        {
+            // Declare the broker topology BEFORE the dispatcher/consumers start, so no publish can
+            // race ahead of its bindings. Registered first => its StartAsync completes first.
+            services.AddHostedService<RabbitMqTopologyInitializer>();
+            services.AddHostedService<OutboxDispatcher>();
+            services.AddHostedService<NotificationConsumer>();
+            services.AddHostedService<HoldExpiryService>();
+            services.AddHostedService<PaymentReconciliationService>();
+            // Retention sweep for the unbounded bookkeeping tables (outbox, dedupe, idempotency,
+            // dead refresh tokens). Worker-only scheduled work.
+            services.AddHostedService<RetentionService>();
+        }
 
-        // CQRS: the projection consumer maintains the read model; the query port serves it.
-        services.AddHostedService<AvailabilityProjectionConsumer>();
+        // CQRS: the projection consumer maintains the read model (worker-only); the query port
+        // serves it (registered everywhere - the API reads the read model).
+        if (runsWorkers)
+            services.AddHostedService<AvailabilityProjectionConsumer>();
         services.AddScoped<IAvailabilityReadModel, AvailabilityReadModel>();
 
-        // Ticket issuing: PDF generation + file storage behind ports, consumed asynchronously.
+        // Ticket issuing: PDF generation + file storage behind ports. The consumer is worker-only;
+        // the ports stay registered everywhere (the API streams stored PDFs to clients).
         services.AddSingleton<ITicketDocumentGenerator, QuestPdfTicketGenerator>();
-        services.AddSingleton<IFileStorage, LocalFileStorage>();
-        services.AddHostedService<TicketIssuerConsumer>();
+        AddFileStorage(services, configuration);
+        if (runsWorkers)
+            services.AddHostedService<TicketIssuerConsumer>();
 
         // Security: PBKDF2 hashing + JWT creation. Singletons - both are stateless.
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
@@ -112,11 +132,50 @@ public static class DependencyInjection
                 break;
         }
 
-        // Virtual waiting room: Redis-backed line + the admission valve.
+        // Virtual waiting room: Redis-backed line (read/written by the API) + the admission valve
+        // (worker-only, so N API replicas cannot multiply the admission rate).
         services.AddSingleton<RedisWaitingRoom>();
         services.AddSingleton<IWaitingRoom>(sp => sp.GetRequiredService<RedisWaitingRoom>());
-        services.AddHostedService<WaitingRoomAdmitter>();
+        if (runsWorkers)
+            services.AddHostedService<WaitingRoomAdmitter>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Local filesystem in dev; S3/MinIO for genuinely shared, multi-replica-safe blob storage
+    /// (a ticket PDF written by one pod is readable by every other). The <see cref="IFileStorage"/>
+    /// port is identical either way, so no caller changes when the provider flips.
+    /// </summary>
+    private static void AddFileStorage(IServiceCollection services, IConfiguration configuration)
+    {
+        var provider = configuration["FileStorage:Provider"] ?? "Local";
+        if (!string.Equals(provider, "S3", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IFileStorage, LocalFileStorage>();
+            return;
+        }
+
+        var options = configuration.GetSection(S3StorageOptions.SectionName).Get<S3StorageOptions>() ?? new();
+        services.AddSingleton(options);
+        services.AddSingleton<IAmazonS3>(_ =>
+        {
+            var config = new AmazonS3Config
+            {
+                ForcePathStyle = options.ForcePathStyle,   // MinIO addresses buckets by path
+                AuthenticationRegion = options.Region,
+                // SDK v4 defaults to adding a flexible (CRC32) checksum trailer, which MinIO and
+                // other S3-compatible stores reject with an x-amz-content-sha256 mismatch. Only add
+                // checksums when the operation requires them - real AWS S3 is unaffected.
+                RequestChecksumCalculation = RequestChecksumCalculation.WHEN_REQUIRED,
+                ResponseChecksumValidation = ResponseChecksumValidation.WHEN_REQUIRED
+            };
+            if (!string.IsNullOrWhiteSpace(options.ServiceUrl))
+                config.ServiceURL = options.ServiceUrl;    // MinIO / non-AWS endpoint
+            return new AmazonS3Client(new BasicAWSCredentials(options.AccessKey, options.SecretKey), config);
+        });
+        services.AddSingleton<IFileStorage, S3FileStorage>();
+        // Ensure the bucket exists before the ticket issuer (or an API read) touches it.
+        services.AddHostedService<S3BucketInitializer>();
     }
 }

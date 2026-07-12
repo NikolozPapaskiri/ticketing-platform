@@ -22,11 +22,14 @@ COPY --from=build /app .
 
 # Writable app data root for the non-root runtime user. Named Docker volumes inherit this
 # ownership on first use; Kubernetes sets fsGroup for mounted volumes.
-RUN mkdir -p /var/ticketing/files && chown -R $APP_UID:$APP_UID /var/ticketing
+RUN mkdir -p /var/ticketing/files /var/ticketing/keys && chown -R $APP_UID:$APP_UID /var/ticketing
 
 # Non-root: the base image ships an unprivileged 'app' user; a container escape lands
 # without root. Port 8080 because binding <1024 needs privileges we just gave up.
+# DataProtection keys go under the writable data root - the default (and the Development
+# appsettings' relative path) would land under the root-owned /app and crash on first write.
 ENV ASPNETCORE_URLS=http://+:8080
+ENV DataProtection__KeysPath=/var/ticketing/keys
 EXPOSE 8080
 USER $APP_UID
 

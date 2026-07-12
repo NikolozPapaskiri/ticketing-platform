@@ -27,7 +27,7 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
 - Frontend milestones M0-M6 are complete in `apps/web` (M5 = the tkt.ge-style marketplace,
   M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
   position pushes, 429-enforced checkout on gated events).
-- Current verified backend suite: 161 tests (60 unit + 101 integration).
+- Current verified backend suite: 197 tests (78 unit + 119 integration).
 - The three oversell-prevention strategies are load-tested head-to-head under flash-sale
   concurrency — zero oversell across all three; numbers and analysis in
   [docs/LOAD_TEST.md](docs/LOAD_TEST.md).
@@ -35,10 +35,19 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
   **PR 1** (durable payment state machine), **PR 2** (atomic refund / ticket scan / hold release,
   scanned-ticket-is-non-refundable), **PR 3** (RabbitMQ delivery safety: publisher confirms +
   mandatory routing, topology-before-dispatch, bounded consumer retries + DLQ, versioned event
-  envelopes, and delivery metrics), and **PR 4** (waiting-room atomicity + a global, replica-
-  independent admission rate, with server-verifiable quota-limited grants) are done — a payment
-  in flight can't oversell, double-charge, be lost to a crash, or be double-refunded; a ticket
-  admits once; no event is silently lost; and a leaked admission GUID alone can't reserve.
+  envelopes, and delivery metrics), **PR 4** (waiting-room atomicity + a global, replica-
+  independent admission rate, with server-verifiable quota-limited grants), and **PR 5**
+  (authentication session safety: family-scoped refresh tokens with atomic rotation + a grace
+  window so parallel refreshes aren't mistaken for theft, server-side logout revocation,
+  proxy-aware rate limiting, and startup validation of security-sensitive options), and **PR 6**
+  (operational hardening: an API/worker host split so HTTP scaling doesn't multiply background
+  work, role-aware readiness that treats RabbitMQ as async for the API, shared S3/MinIO object
+  storage behind the file port, operational metrics + a retention sweep for unbounded tables, and
+  CI that runs Playwright against the real stack + scans images + audits dependencies) are done — a
+  payment in flight can't oversell, double-charge, be lost to a crash, or be double-refunded; a
+  ticket admits once; no event is silently lost; a leaked admission GUID alone can't reserve;
+  concurrent refreshes neither fork a session nor revoke a legitimate one; and the API and workers
+  scale independently against shared, durable storage. The hardening plan is complete.
 - Current verified frontend checks: typecheck, lint, production build, npm audit, and the
   Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the
@@ -150,10 +159,22 @@ origin can break Next dev assets/HMR and make the UI look like it is cycling.
   Postgres, Redis, and RabbitMQ.
 - **Rate limiting:** fixed-window per client IP on the auth endpoints (429 before any password
   hashing runs); limit via `RateLimiting:AuthRequestsPerMinute`.
-- **OpenTelemetry:** traces (ASP.NET Core, HttpClient, Npgsql, and the custom messaging source)
-  + metrics. The outbox stores the W3C `traceparent`, the dispatcher stamps it into message
-  headers, and the consumer rejoins it — **one trace spans HTTP → outbox → RabbitMQ →
-  consumer**. Point `Otlp:Endpoint` at a collector (Jaeger, Grafana) to export.
+- **OpenTelemetry:** traces (ASP.NET Core, HttpClient, Npgsql, and the custom messaging source),
+  metrics (custom `TicketingPlatform` meter + runtime), and logs — all over OTLP. The outbox stores
+  the W3C `traceparent`, the dispatcher stamps it into message headers, and the consumer rejoins it
+  — **one trace spans HTTP → outbox → RabbitMQ → consumer**.
+- **Monitoring stack (metrics + logs + traces):** an optional overlay stands up an OpenTelemetry
+  Collector → Prometheus + Loki + Tempo → **Grafana** (with a provisioned overview dashboard) plus
+  postgres/redis/RabbitMQ/MinIO exporters:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+  # Grafana:    http://localhost:3001  (anonymous viewer; admin/admin to edit)
+  # Prometheus: http://localhost:9090
+  ```
+- **In-app ops page:** `/(admin)/ops` in the web UI (PlatformAdmin) — a curated at-a-glance snapshot
+  (dependency health, reconciliation/outbox/DLQ backlogs, waiting-room depth, orders by status) via
+  `GET /api/v1/admin/ops`, computed from the source of truth so it needs no Prometheus. Design in
+  [docs/OBSERVABILITY_PLAN.md](docs/OBSERVABILITY_PLAN.md).
 - **Graceful shutdown:** 30s drain on SIGTERM so in-flight sagas finish during rolling updates.
 - **CI:** GitHub Actions builds and runs all tests (Testcontainers works on the runners), then
   builds the image and pushes to GHCR from `main`.

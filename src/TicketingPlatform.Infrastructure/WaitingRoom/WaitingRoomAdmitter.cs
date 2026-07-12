@@ -54,6 +54,7 @@ public sealed class WaitingRoomAdmitter : BackgroundService
 
     private async Task TickAsync(CancellationToken ct)
     {
+        var totalWaiting = 0L;
         foreach (var eventId in await _waitingRoom.GetActiveQueuesAsync(ct))
         {
             var (admitted, stillWaiting) = await _waitingRoom.AdmitBatchAsync(eventId, ct);
@@ -64,9 +65,18 @@ public sealed class WaitingRoomAdmitter : BackgroundService
             for (var i = 0; i < stillWaiting.Count; i++)
                 await _broadcaster.NotifyPositionAsync(eventId, stillWaiting[i], i + 1, ct);
 
+            // The rate of this counter is the actual global admission rate an operator alerts on.
             if (admitted.Count > 0)
+            {
+                TicketingMetrics.WaitingRoomAdmitted.Add(admitted.Count);
                 _logger.LogInformation("Waiting room {EventId}: admitted {Count}, {Waiting} still in line",
                     eventId, admitted.Count, stillWaiting.Count);
+            }
+
+            totalWaiting += stillWaiting.Count;
         }
+
+        // Total depth across every active queue this tick.
+        TicketingMetrics.SetWaitingRoomDepth(totalWaiting);
     }
 }

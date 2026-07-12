@@ -4,9 +4,11 @@ metadata:
   name: ticketing-api
 spec:
   # TWO replicas on purpose: this is where in-process assumptions break (and ours hold:
-  # inventory safety is the xmin token in Postgres, cache is Redis, queue position would be
-  # Redis - nothing correctness-critical lives in pod memory). The expiry service runs in both
-  # pods; that is safe here because the state machine + concurrency token make it idempotent.
+  # inventory safety is the xmin token in Postgres, cache is Redis, queue position is Redis -
+  # nothing correctness-critical lives in pod memory). The background workers (outbox dispatcher,
+  # consumers, expiry, reconciliation, admission valve) run in the SEPARATE ticketing-worker
+  # Deployment (Hosting__Role=Worker), so scaling these HTTP replicas up does not multiply the
+  # admission rate or the scheduled work.
   replicas: 2
   selector:
     matchLabels: { app: ticketing-api }
@@ -22,12 +24,18 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+          env:
+            # HTTP-only profile: no background workers in this Deployment.
+            - name: Hosting__Role
+              value: "Api"
           envFrom:
             - configMapRef: { name: api-config }
             - secretRef: { name: api-secrets }
-          # Readiness gates traffic: not ready (a dependency is down) => taken out of the
-          # Service, NOT restarted. Liveness restarts only a wedged process. Mixing these up
-          # is the classic restart-loop-during-a-DB-outage incident.
+          # Readiness gates traffic: not ready (a HARD dependency is down) => taken out of the
+          # Service, NOT restarted. For the API, RabbitMQ is NOT a hard dependency - a broker
+          # outage buffers the outbox in Postgres, so /health/ready stays green and the pod keeps
+          # serving. Liveness restarts only a wedged process. Mixing these up is the classic
+          # restart-loop-during-a-DB-outage incident.
           readinessProbe:
             httpGet: { path: /health/ready, port: 8080 }
             initialDelaySeconds: 5
@@ -43,13 +51,8 @@ spec:
           resources:
             requests: { cpu: 250m, memory: 256Mi }
             limits: { cpu: "1", memory: 512Mi }
-          volumeMounts:
-            - name: ticket-files
-              mountPath: /var/ticketing/files
-      volumes:
-        - name: ticket-files
-          persistentVolumeClaim:
-            claimName: ticket-files
+          # No file volume: ticket PDFs/images live in shared object storage (see minio.yaml),
+          # reachable by every replica over the S3 API.
 ---
 apiVersion: v1
 kind: Service
@@ -61,13 +64,3 @@ spec:
     - port: 80
       targetPort: 8080
   # Try it without an Ingress: kubectl -n ticketing port-forward svc/ticketing-api 5001:80
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ticket-files
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi

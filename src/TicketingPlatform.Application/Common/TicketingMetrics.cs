@@ -73,4 +73,46 @@ public static class TicketingMetrics
     public static readonly ObservableGauge<long> OutboxBacklogAge =
         Meter.CreateObservableGauge("ticketing.outbox.backlog_age",
             () => Interlocked.Read(ref _outboxBacklogAgeMs), "ms");
+
+    // --- Operational observability (PR 6 §6.4): reconciliation backlogs, expiry lag, admission
+    // rate, scan conflicts, and retention, so an operator can alert on a stalling background tier. ---
+
+    /// <summary>Concurrent scanners racing one code: one wins, the losers land here (double-entry attempts).</summary>
+    public static readonly Counter<long> TicketScanConflicts =
+        Meter.CreateCounter<long>("ticketing.tickets.scan_conflicts");
+
+    /// <summary>Visitors admitted from the waiting room. Its rate IS the actual global admission rate.</summary>
+    public static readonly Counter<long> WaitingRoomAdmitted =
+        Meter.CreateCounter<long>("ticketing.waiting_room.admitted");
+
+    /// <summary>Rows deleted by the retention sweep, tagged by table.</summary>
+    public static readonly Counter<long> RetentionRowsPruned =
+        Meter.CreateCounter<long>("ticketing.retention.rows_pruned");
+
+    private static long _waitingRoomDepth;
+    /// <summary>The admitter records total visitors still queued across all active events each tick.</summary>
+    public static void SetWaitingRoomDepth(long depth) => Interlocked.Exchange(ref _waitingRoomDepth, depth);
+    public static readonly ObservableGauge<long> WaitingRoomDepth =
+        Meter.CreateObservableGauge("ticketing.waiting_room.depth", () => Interlocked.Read(ref _waitingRoomDepth));
+
+    private static long _paymentReconciliationBacklog;
+    /// <summary>Orders whose payment lease has expired and are awaiting reconciliation.</summary>
+    public static void SetPaymentReconciliationBacklog(long count) => Interlocked.Exchange(ref _paymentReconciliationBacklog, count);
+    public static readonly ObservableGauge<long> PaymentReconciliationBacklog =
+        Meter.CreateObservableGauge("ticketing.payments.reconciliation_backlog",
+            () => Interlocked.Read(ref _paymentReconciliationBacklog));
+
+    private static long _refundReconciliationBacklog;
+    /// <summary>Orders with a stale refund claim awaiting reconciliation.</summary>
+    public static void SetRefundReconciliationBacklog(long count) => Interlocked.Exchange(ref _refundReconciliationBacklog, count);
+    public static readonly ObservableGauge<long> RefundReconciliationBacklog =
+        Meter.CreateObservableGauge("ticketing.refunds.reconciliation_backlog",
+            () => Interlocked.Read(ref _refundReconciliationBacklog));
+
+    private static long _holdExpiryLagMs;
+    /// <summary>How overdue the oldest just-expired hold was: the expiry worker's falling-behind signal.</summary>
+    public static void SetHoldExpiryLagMs(long ageMs) => Interlocked.Exchange(ref _holdExpiryLagMs, ageMs);
+    public static readonly ObservableGauge<long> HoldExpiryLag =
+        Meter.CreateObservableGauge("ticketing.holds.expiry_lag",
+            () => Interlocked.Read(ref _holdExpiryLagMs), "ms");
 }

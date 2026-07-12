@@ -75,7 +75,14 @@ public sealed class HoldExpiryService : BackgroundService
             .ToListAsync(ct);
 
         if (expired.Count == 0)
+        {
+            TicketingMetrics.SetHoldExpiryLagMs(0);
             return;
+        }
+
+        // How overdue the oldest expired hold was: a growing lag means the worker is falling behind.
+        var lag = now - expired[0].ExpiresAt;
+        TicketingMetrics.SetHoldExpiryLagMs((long)Math.Max(0, lag.TotalMilliseconds));
 
         foreach (var hold in expired)
         {

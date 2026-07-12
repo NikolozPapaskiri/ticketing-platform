@@ -163,6 +163,15 @@ public sealed class RedisWaitingRoom : IWaitingRoom
         return members.Select(m => Guid.Parse((string)m!)).ToList();
     }
 
+    public async Task<long> GetTotalWaitingAsync(CancellationToken ct)
+    {
+        var db = _redis.GetDatabase();
+        long total = 0;
+        foreach (var eventId in await GetActiveQueuesAsync(ct))
+            total += await db.SortedSetLengthAsync(LineKey(eventId));
+        return total;
+    }
+
     /// <summary>
     /// One admission tick, executed as a single atomic Lua script (see <see cref="AdmitScript"/>):
     /// the global token bucket decides how many may pass, they are popped from the line AND granted

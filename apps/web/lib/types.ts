@@ -138,3 +138,24 @@ export type ApiProblem = {
   detail?: string;
   status?: number;
 };
+
+export type OpsDependency = {
+  name: string;
+  status: string;
+  description: string | null;
+};
+
+export type OpsSnapshot = {
+  generatedAt: string;
+  hostRole: string;
+  overallStatus: string;
+  dependencies: OpsDependency[];
+  waitingRoomDepth: number;
+  paymentsAwaitingReconciliation: number;
+  refundsPending: number;
+  outboxPending: number;
+  outboxQuarantined: number;
+  outboxOldestPendingAgeSeconds: number | null;
+  deadLetterDepth: number | null;
+  ordersByStatus: Record<string, number>;
+};

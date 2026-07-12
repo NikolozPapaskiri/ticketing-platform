@@ -583,9 +583,68 @@ There must be no crash window between queue removal and admission creation.
 - Admission reuse and queue-position abuse have explicit bounds.
 - Polling and SignalR remain fallback-compatible.
 
+### 4.6 Noted follow-up (queue-integrity hardening, not required by the gate)
+
+PR 4 makes the admission *credential* fully server-controlled: the grant is issued only by the
+admitter, event-bound, customer-bound on first use, quota-limited, and TTL'd, and anonymous joins
+are per-client rate-limited. That satisfies the gate ("a leaked GUID alone is insufficient to
+reserve"). The visitor GUID that stands in the queue line remains client-generated — it is only an
+opaque slot label, not an authorization token.
+
+A future, separately-scoped PR could replace that client-chosen slot label with a **server-minted,
+HMAC-signed join token** (stateless verification, no extra Redis round-trip; carries `eventId`,
+`issuedAt`, and a nonce) so the slot identity itself is tamper-evident and cannot be bulk-forged.
+The marginal security value over PR 4 is **queue integrity / Sybil resistance** (making it harder
+for a scalper to mint many legitimate-looking positions), not admission safety — and a signed token
+alone does not stop a botnet spread across many IPs. To actually raise the cost of mass queue entry
+it must be paired with a **join-time challenge** (CAPTCHA or lightweight proof-of-work) or
+authenticated queue entry for high-risk events, per §4.3's open question.
+
+This is deliberately deferred: it requires a frontend contract change (the client must store and
+replay the server-issued token across join → status → hold) plus signing-key management/rotation,
+and it addresses a distinct threat from the ones PR 4 closes. Bundle it with §6 ops work or fold it
+into a dedicated anti-abuse PR when the marketplace threat model justifies the added surface.
+
 ---
 
 ## PR 5: Authentication session concurrency and proxy-aware rate limiting
+
+**Status: DONE** on branch `feature/session-safety`. Refresh tokens are now **family-scoped** (one
+login = one family). Rotation is an atomic compare-and-swap - a conditional
+`UPDATE ... WHERE RevokedAt IS NULL` inside the same transaction that inserts the successor
+(`IRefreshTokenRepository.TryRotateAsync`) - so parallel refreshes can neither fork the session nor
+mint two successors. The single caller that wins the claim gets the new pair; a caller that finds
+the token already rotated **within a short, configurable grace window**
+(`Auth:RefreshRotationGraceSeconds`, default 5s) is treated as a legitimate concurrent /
+near-concurrent refresh and gets a sibling in the same family, **not** a theft signal. A rotated
+token replayed **outside** the window still revokes the whole family - but only THAT family, so a
+compromise or sign-out on one device leaves the user's other devices alone (the old code revoked
+every token the user owned). Reads are `AsNoTracking`, so the post-claim re-read reflects the
+concurrent rotation rather than a stale identity-map row (the bug that first made the concurrency
+test flake). The BFF also **single-flights** refreshes per replica so a burst rotates once; the
+server-side grace window covers the residual cross-replica race.
+
+**Logout is server-side**: `POST /auth/logout` revokes the token's family, and the BFF calls it
+before clearing cookies, so a leaked refresh cookie is dead after sign-out (previously logout only
+cleared local cookies). It always returns 204 (idempotent, no token-validity oracle).
+
+**Rate limiting is proxy-aware**: with a trusted proxy configured (`ReverseProxy` section),
+`UseForwardedHeaders` rewrites the client IP from `X-Forwarded-For` **only** when the immediate peer
+is a configured proxy/network, before the limiter partitions on it; with nothing configured the
+header is ignored so it cannot be forged to dodge or poison the per-IP window. The default-trust
+loopback lists are cleared and replaced with only the configured proxies. (Login limits stay
+per-instance for now - a fixed-window-per-IP guard in front of PBKDF2; a distributed limiter is
+deferred to §6 with the other multi-replica ops concerns.)
+
+**Security-sensitive options are validated at startup** (`SecurityOptionsValidation.ValidateJwt`):
+a missing/short (<32-byte) signing key, a leftover `DEV-ONLY` key in a non-Development environment,
+or a non-positive access-token lifetime fails the process fast instead of minting
+forgeable-in-practice tokens.
+
+Migration `AddRefreshTokenFamily` adds `FamilyId` (backfilled per existing row via
+`gen_random_uuid()` so an upgrade doesn't lump every legacy session into one family). **176 tests
+green (68 unit + 108 integration)** against real PostgreSQL/Redis/RabbitMQ; Release build 0
+warnings; `has-pending-model-changes` clean. Next: PR 6 (deployment/storage/health/ops).
 
 Suggested branch: `feature/session-safety`
 
@@ -611,6 +670,53 @@ Required tests:
 ---
 
 ## PR 6: Deployment, storage, health, and operational hardening
+
+**Status: DONE** on branch `feature/production-operations`.
+
+**§6.1 host split / §6.2 readiness.** One image, three profiles via `Hosting:Role` (`All` default /
+`Api` / `Worker`). The eight background workers register only on a worker-running role, so scaling
+the API's HTTP replicas can no longer multiply the admission valve or the scheduled scans. Readiness
+is role-aware: Postgres and Redis gate everywhere, but **RabbitMQ is an async dependency for the
+API** (a broker outage buffers the outbox instead of pulling API pods from the load balancer) and a
+hard readiness dependency only for a worker. A new non-gating `/health/detail` reports every
+dependency. k8s gains a separate `ticketing-worker` Deployment; a worker serves only the health
+probes.
+
+**§6.3 object storage.** `S3FileStorage` (AWSSDK.S3) behind the unchanged `IFileStorage` port -
+MinIO in dev/CI, S3 in prod, selected by `FileStorage:Provider`. Writes are idempotent/atomic
+(deterministic-key `PutObject`, no torn files or orphaned supersedes), with a bounded-retry bucket
+initializer. compose gains MinIO; k8s drops the multi-replica-hostile ReadWriteOnce ticket-files PVC
+in favour of a MinIO Deployment. (SDK v4's default checksum trailer, which MinIO rejects, is disabled
+via `WHEN_REQUIRED`.)
+
+**§6.4 observability + retention.** New metrics on the exported meter: ticket scan conflicts,
+waiting-room admitted (rate = actual global admission rate) + depth, payment/refund reconciliation
+backlog, and hold-expiry lag - joining the payment-outcome and PR 3 outbox/consumer metrics. A
+worker-only `RetentionService` prunes the unbounded bookkeeping tables (delivered outbox, dedupe
+marks, completed idempotency records, dead refresh tokens) on configurable windows, set-based and
+idempotent, never touching live rows.
+
+**§6.5 CI + ops.** CI now runs the Playwright golden journey against the **real compose stack**
+(exercising the API/worker split and object storage end to end), builds and scans both Dockerfiles
+(Trivy), fails on vulnerable NuGet/npm dependencies, and gates on `ef migrations
+has-pending-model-changes`. Dependabot automates dependency updates across NuGet/npm/Actions/Docker.
+
+**197 tests green (78 unit + 119 integration)** against real PostgreSQL/Redis/RabbitMQ/MinIO; Release
+build 0 warnings; migration parity clean; k8s manifests render. This completes the production safety
+hardening plan's implementation.
+
+**§6.5 CI — the workflow was YAML-validated but not run until the PR opened, which exposed two real
+failures (both now FIXED):**
+
+1. ✅ `images` job — `aquasecurity/trivy-action@0.28.0` was never a published tag (repin to `0.35.0`).
+2. ✅ `e2e` job — the API crashed on startup in-container: `appsettings.Development`'s relative
+   `DataProtection:KeysPath` (`.aspnet/DataProtection-Keys`) resolved under the root-owned `/app`, so
+   the non-root user couldn't create it. The web came up and its redirect test passed, but every test
+   that hit the API (the seed step) failed. Fixed by pointing the keys at the writable
+   `/var/ticketing/keys` via a Dockerfile env. Reproduced locally against the full compose stack: all
+   four golden-journey tests pass, including the S3/MinIO ticket download.
+3. Minor (still open): `checkout@v4` / `setup-node@v4` / `setup-dotnet@v4` emit Node-20 deprecation
+   **warnings** (not failures) — bump when convenient.
 
 Suggested branch: `feature/production-operations`
 

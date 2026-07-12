@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Threading.RateLimiting;
 using Asp.Versioning;
@@ -5,9 +6,11 @@ using Microsoft.AspNetCore.DataProtection;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -30,6 +33,11 @@ using TicketingPlatform.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 const string WebHubCorsPolicy = "web-hub";
+
+// One image, one of three profiles. Api serves HTTP with no background workers; Worker runs the
+// workers and serves only health; All (default: dev/tests/compose) does both. AddInfrastructure
+// reads the same setting to decide which hosted services to register.
+var hostRole = HostRoleExtensions.ParseHostRole(builder.Configuration["Hosting:Role"]);
 
 builder.Services.AddControllers(options =>
 {
@@ -71,6 +79,9 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 // on EVERY request; a JWT is signed, not encrypted, so validation is the whole security story.
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Missing 'Jwt' configuration section.");
+
+// Fail fast on a weak/missing/left-over-dev signing key rather than mint forgeable tokens.
+SecurityOptionsValidation.ValidateJwt(jwt, builder.Environment.IsDevelopment());
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -124,6 +135,7 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<OrderService>();
 builder.Services.AddScoped<TicketService>();
 builder.Services.AddScoped<WaitingRoomService>();
+builder.Services.AddScoped<TicketingPlatform.Api.Features.Ops.OpsSnapshotService>();
 
 // Hold TTL / expiry-scan settings (plain singleton so Application stays free of IOptions).
 builder.Services.AddSingleton(
@@ -134,6 +146,16 @@ builder.Services.AddSingleton(
 builder.Services.AddSingleton(
     builder.Configuration.GetSection(TicketingPlatform.Application.Common.WaitingRoomOptions.SectionName)
         .Get<TicketingPlatform.Application.Common.WaitingRoomOptions>() ?? new());
+
+// Refresh-session tuning (rotation grace window). Plain singleton, same as the options above.
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection(TicketingPlatform.Application.Common.AuthSessionOptions.SectionName)
+        .Get<TicketingPlatform.Application.Common.AuthSessionOptions>() ?? new());
+
+// Retention windows for the unbounded bookkeeping tables (used by the worker's retention sweep).
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection(TicketingPlatform.Application.Common.RetentionOptions.SectionName)
+        .Get<TicketingPlatform.Application.Common.RetentionOptions>() ?? new());
 
 // SignalR with the Redis backplane: group membership and broadcasts flow through Redis, so a
 // message published from pod B reaches a client connected to pod A. Without the backplane,
@@ -161,10 +183,38 @@ builder.Services.AddCors(options =>
 // classic restart-loop-during-an-outage incident.
 builder.Services.AddSingleton<RedisHealthCheck>();
 builder.Services.AddSingleton<RabbitMqHealthCheck>();
+// RabbitMQ is an ASYNC dependency for the API: if the broker is down, checkout still writes outbox
+// rows to Postgres and the worker publishes them once it recovers - so a broker outage must NOT
+// pull API pods from the load balancer. It IS a hard readiness dependency for a worker, which
+// cannot function without it. Postgres and Redis gate readiness everywhere (Redis backs the
+// waiting room, the reservation strategy, the cache, and the SignalR backplane). Every check is
+// still reported on /health/detail regardless of whether it gates traffic.
+string[] rabbitReadinessTags = hostRole.RunsWorkers() ? ["ready"] : ["broker"];
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<TicketingDbContext>("postgres", tags: ["ready"])
     .AddCheck<RedisHealthCheck>("redis", tags: ["ready"])
-    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: rabbitReadinessTags);
+
+// --- Trusted reverse proxy: when configured, the real client IP comes from X-Forwarded-For, but
+// only when the immediate peer is a trusted proxy (else the header is spoofable and would let an
+// attacker forge or poison rate-limit partitions). Off by default => the socket peer IP is used.
+var reverseProxy = builder.Configuration.GetSection(ReverseProxyOptions.SectionName).Get<ReverseProxyOptions>() ?? new();
+if (reverseProxy.Enabled)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.ForwardLimit = reverseProxy.ForwardLimit;
+        // Start from an EMPTY trust list (the framework defaults trust loopback) and add only the
+        // proxies we were explicitly told about.
+        options.KnownProxies.Clear();
+        options.KnownIPNetworks.Clear();
+        foreach (var proxy in reverseProxy.KnownProxies)
+            options.KnownProxies.Add(IPAddress.Parse(proxy));
+        foreach (var network in reverseProxy.KnownNetworks)
+            options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+    });
+}
 
 // --- Rate limiting on the auth endpoints: cut brute force off BEFORE PBKDF2 burns CPU per
 // guess. Fixed window per client IP; limit configurable (tests raise it, prod keeps it tight).
@@ -183,11 +233,13 @@ builder.Services.AddRateLimiter(options =>
 });
 
 // --- OpenTelemetry: traces (HTTP in, HTTP out, Npgsql SQL, and the custom messaging source
-// that carries traces across the RabbitMQ hop) + metrics. Exported over OTLP when
-// Otlp:Endpoint is configured (Jaeger/Grafana etc.); otherwise instrumentation is on but quiet.
+// that carries traces across the RabbitMQ hop) + metrics + logs. All three are exported over OTLP
+// when Otlp:Endpoint is configured (the observability stack's collector); otherwise instrumentation
+// is on but quiet. The service name is role-aware so the API and worker are distinguishable.
 var otlpEndpoint = builder.Configuration["Otlp:Endpoint"];
+var otelServiceName = hostRole == HostRole.Worker ? "ticketing-worker" : "ticketing-api";
 builder.Services.AddOpenTelemetry()
-    .ConfigureResource(resource => resource.AddService("ticketing-api"))
+    .ConfigureResource(resource => resource.AddService(otelServiceName))
     .WithTracing(tracing =>
     {
         tracing.AddAspNetCoreInstrumentation()
@@ -206,6 +258,17 @@ builder.Services.AddOpenTelemetry()
         if (otlpEndpoint is not null)
             metrics.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
     });
+
+// Structured logs go to Loki via the same OTLP pipeline, carrying the trace id so a log line links
+// straight to its trace.
+builder.Logging.AddOpenTelemetry(logging =>
+{
+    logging.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(otelServiceName));
+    logging.IncludeScopes = true;
+    logging.IncludeFormattedMessage = true;
+    if (otlpEndpoint is not null)
+        logging.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+});
 
 // --- Graceful shutdown: on SIGTERM (K8s pod termination) the host stops accepting requests,
 // then gives in-flight requests and the background services' stopping tokens this long to
@@ -246,13 +309,22 @@ if (app.Environment.IsDevelopment())
 
     // Development convenience: migrate + seed the first PlatformAdmin so the closed
     // provisioning chain (only admins create staff) can start. Production migrates
-    // deliberately (CI/CD step), never implicitly at boot.
-    using (var scope = app.Services.CreateScope())
+    // deliberately (CI/CD step), never implicitly at boot. Only an API-serving role does this,
+    // so a split-out worker pod does not race the API to migrate the same database.
+    if (hostRole.ServesApi())
     {
-        await scope.ServiceProvider.GetRequiredService<TicketingDbContext>().Database.MigrateAsync();
+        using (var scope = app.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<TicketingDbContext>().Database.MigrateAsync();
+        }
+        await DevDataSeeder.SeedAsync(app.Services);
     }
-    await DevDataSeeder.SeedAsync(app.Services);
 }
+
+// Rewrite RemoteIpAddress from the trusted proxy's X-Forwarded-For BEFORE the rate limiter reads
+// it, so brute-force windows partition on the real client, not the shared ingress address.
+if (reverseProxy.Enabled)
+    app.UseForwardedHeaders();
 
 // Rate limiting sits before authentication: a brute-forcer gets 429'd without ever reaching
 // the password hasher.
@@ -265,17 +337,29 @@ app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseAuthorization();
 
-// Probe endpoints (anonymous by design - Kubernetes is not going to log in).
+// Probe endpoints (anonymous by design - Kubernetes is not going to log in). Every role serves
+// these so both the API and worker Deployments are probeable.
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
+// Detailed, non-gating dependency view for humans/dashboards - reports every check (incl. the
+// async broker) separately from the readiness decision.
+app.MapHealthChecks("/health/detail", new HealthCheckOptions
+{
+    Predicate = _ => true,
+    ResponseWriter = HealthResponse.WriteAsync
+});
 
-app.MapHub<AvailabilityHub>("/hubs/availability")
-    .RequireCors(WebHubCorsPolicy); // live availability push (anonymous by design)
+// API-serving roles (All/Api) expose the application surface; a Worker pod serves only health.
+if (hostRole.ServesApi())
+{
+    app.MapHub<AvailabilityHub>("/hubs/availability")
+        .RequireCors(WebHubCorsPolicy); // live availability push (anonymous by design)
 
-// The vertical-slice set piece (see the file's header for the architecture argument).
-app.MapEventSalesReport();
+    // The vertical-slice set piece (see the file's header for the architecture argument).
+    app.MapEventSalesReport();
 
-app.MapControllers();
+    app.MapControllers();
+}
 
 app.Run();
 

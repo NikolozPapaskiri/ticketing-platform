@@ -43,18 +43,33 @@ function withBearer(init: RequestInit, accessToken?: string) {
   return { ...init, headers };
 }
 
-async function refreshAccessToken(refreshToken: string) {
-  const response = await apiFetch("/api/v1/auth/refresh", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ refreshToken })
-  });
+// Single-flight refresh: concurrent requests on THIS web replica carrying the same cookie
+// coalesce into one API rotation instead of each racing to rotate (which would mint throwaway
+// sibling tokens). The server-side rotation grace window covers the residual cross-replica race.
+const inFlightRefreshes = new Map<string, Promise<AuthResponse | null>>();
 
-  if (!response.ok) {
-    return null;
+export function refreshAccessToken(refreshToken: string): Promise<AuthResponse | null> {
+  const existing = inFlightRefreshes.get(refreshToken);
+  if (existing) {
+    return existing;
   }
 
-  return (await response.json()) as AuthResponse;
+  const pending = (async () => {
+    const response = await apiFetch("/api/v1/auth/refresh", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken })
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as AuthResponse;
+  })();
+
+  inFlightRefreshes.set(refreshToken, pending);
+  return pending.finally(() => inFlightRefreshes.delete(refreshToken));
 }
 
 export async function authorizedFetch(path: string, init: RequestInit = {}) {

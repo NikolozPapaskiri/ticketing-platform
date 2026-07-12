@@ -8,6 +8,8 @@ resources:
   - postgres.yaml
   - redis.yaml
   - rabbitmq.yaml
+  - minio.yaml
   - api-config.yaml
   - api.yaml
+  - worker.yaml
   - web.yaml

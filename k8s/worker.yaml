@@ -1,0 +1,51 @@
+# The background-worker profile of the SAME image: outbox dispatcher, RabbitMQ consumers, hold
+# expiry, payment/refund reconciliation, and the waiting-room admission valve. Split out from the
+# API Deployment so HTTP traffic and background work scale independently (Hosting__Role=Worker).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-worker
+spec:
+  # ONE replica by default. The workers are multi-replica-safe (xmin CAS on claims, the admission
+  # rate is a shared Redis token bucket, consumers dedupe per-consumer), but the admission valve
+  # and scheduled scans are cheap and want a low, steady cardinality - scale deliberately, not
+  # with HTTP load.
+  replicas: 1
+  selector:
+    matchLabels: { app: ticketing-worker }
+  template:
+    metadata:
+      labels: { app: ticketing-worker }
+    spec:
+      securityContext:
+        fsGroup: 1654
+      containers:
+        - name: worker
+          image: ticketing-api:local   # same image as the API; the role env selects the profile
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080       # health probes only; no Service fronts this Deployment
+          env:
+            # Worker profile: runs the background services, serves only the health probes.
+            - name: Hosting__Role
+              value: "Worker"
+          envFrom:
+            - configMapRef: { name: api-config }
+            - secretRef: { name: api-secrets }
+          # For a WORKER, RabbitMQ IS a hard readiness dependency (it cannot dispatch or consume
+          # without the broker), so it is part of /health/ready here - unlike the API.
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health/live, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          # The ticket issuer runs here and writes PDFs to shared object storage (see minio.yaml)
+          # over the S3 API, which every API replica then reads - no shared filesystem needed.

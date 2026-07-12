@@ -536,10 +536,28 @@ This block supersedes older phase-progress lines above if they disagree.
   TryConsumeAdmissionAsync verifies event-binding, binds the customer on first use (leaked GUID ->
   403), and decrements quota (-> 429); anonymous joins are per-client fixed-window throttled.
   §4.5 gate met. Tests: expired-grant, wrong-event, over-quota, customer-binding, join-throttle.
-- Current verification: 161 backend tests (60 unit + 101 integration, incl. 14 waiting-room, 6
-  payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and
-  13 messaging tests: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-
-  envelope/consumer-retry/poison/topology-readiness/duplicate-ticket),
+- Session safety (PR 5) is DONE: refresh tokens are family-scoped; rotation is an atomic
+  compare-and-swap (`TryRotateAsync`: conditional UPDATE ... WHERE RevokedAt IS NULL + successor
+  insert in one tx), and a rotated-token replay WITHIN a configurable grace window is a legitimate
+  concurrent refresh (sibling in the same family), OUTSIDE it revokes only that family. Reads are
+  AsNoTracking so the post-claim re-read is fresh. Server-side logout (`POST /auth/logout` revokes
+  the family; BFF calls it before clearing cookies) + BFF single-flight. Proxy-aware rate limiting
+  (ForwardedHeaders honoured only from configured trusted proxies, else X-Forwarded-For ignored).
+  Startup validation rejects weak/dev/short JWT keys. Migration `AddRefreshTokenFamily`.
+- Ops hardening (PR 6) is DONE: one image, three profiles via `Hosting:Role` (All/Api/Worker) - the
+  8 background workers run only on a worker role, so scaling HTTP replicas doesn't multiply the
+  admission valve/scheduled work; RabbitMQ is async for API readiness (broker outage buffers the
+  outbox, doesn't drop API pods), hard for a worker; `/health/detail` is non-gating. Shared object
+  storage (`S3FileStorage`/MinIO) behind `IFileStorage` replaces the RWO ticket-files PVC. New
+  metrics (scan conflicts, admission rate + depth, reconciliation backlog, expiry lag) + a
+  worker-only `RetentionService` prunes outbox/dedupe/idempotency/dead-refresh-token rows. CI runs
+  Playwright vs the real compose stack, builds+scans both Dockerfiles, audits NuGet/npm, and gates on
+  EF model parity; Dependabot enabled.
+- Current verification: 197 backend tests (78 unit + 119 integration, incl. 7 host-role/retention: 3
+  host-role + 3 S3-storage + 1 retention, 7 session/proxy, 14 waiting-room, 6
+  payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and 13
+  messaging tests: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/
+  consumer-retry/poison/topology-readiness/duplicate-ticket),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
@@ -549,9 +567,22 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- Immediate planned work: PR 5 (auth session concurrency + proxy-aware rate limiting) and PR 6
-  (deployment/storage/health/ops) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview
-  reps follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- The production safety hardening plan (PR 1-6) is IMPLEMENTED and pushed (branches unmerged).
+  Deferred optional follow-ups: a distributed login limiter, and the HMAC-signed join-token + join
+  challenge for waiting-room queue integrity (both noted in the plan). Reserved seating and
+  Elasticsearch remain optional and paused.
+- PR 6's §6.5 CI (only YAML-validated at authoring) had two real failures on the first real run,
+  now FIXED: (1) `images` pinned `trivy-action@0.28.0` (not a real tag) -> `0.35.0`; (2) `e2e`
+  crashed because the container API's relative `DataProtection:KeysPath` resolved under root-owned
+  `/app` (non-root user -> Directory.CreateDirectory denied) -> point it at `/var/ticketing/keys` via
+  a Dockerfile env. Verified locally: full compose stack boots, all 4 golden-journey tests pass.
+  Still open (non-fatal): Node-20 deprecation warnings on checkout/setup-node/setup-dotnet.
+- Observability (`docs/OBSERVABILITY_PLAN.md`): the app exports metrics + traces + logs over OTLP;
+  `docker-compose.observability.yml` overlays an OTel Collector -> Prometheus/Loki/Tempo -> Grafana
+  stack (+ postgres/redis/RabbitMQ/MinIO exporters, provisioned overview dashboard). An in-app
+  PlatformAdmin ops page (`/admin/ops` + `GET /api/v1/admin/ops`) shows a source-of-truth snapshot.
+  Outstanding: P5 (alert rules + k8s monitoring overlay + more dashboards) and an end-to-end runtime
+  check that data reaches Grafana (configs are binary-validated but the full stack wasn't run).
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.
