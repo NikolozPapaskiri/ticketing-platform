@@ -546,14 +546,15 @@ This block supersedes older phase-progress lines above if they disagree.
   delivery metrics (outbox backlog-age gauge, returned/retried/quarantined counters, confirm-latency
   histogram, consumer retry/DLQ counters). Fixed `OrderRefunded` routing. Next: **PR 4** (waiting
   room atomicity + global admission control).
-- **Waiting-room safety (hardening plan PR 4) — atomicity + global rate done, §4.3 open.**
-  `RedisWaitingRoom.AdmitBatchAsync` is one Lua script (pop + grant + positions + empty-line
-  de-register, atomic — no pop-before-grant crash window); admissions are metered by a per-event
-  Redis **token bucket** (`AdmitRatePerSecond` + `AdmitBurst`), so the global rate is independent
-  of replica count (`AdmitBatchSize` is now just a per-call cap). Tests: script-cannot-pop-without-
-  grant, concurrent-admitters-respect-one-global-rate, join-racing-cleanup-remains-discoverable.
-  **Open:** server-verifiable/event-bound/quota-limited admission grants (§4.3) + join throttling.
-- Current verification: 156 backend tests (60 unit + 96 integration, incl. 9 waiting-room, 6
+- **Waiting-room safety (hardening plan PR 4) — DONE.** `AdmitBatchAsync` is one atomic Lua
+  script (pop + grant + positions + empty-line de-register — no pop-before-grant crash window)
+  metered by a per-event Redis **token bucket** (`AdmitRatePerSecond` + `AdmitBurst`), so the
+  global rate is replica-count independent. An admission is a Redis hash grant (quota + bound
+  customer, TTL'd): `TryConsumeAdmissionAsync` atomically verifies it for the event, binds it to
+  the authenticated customer on first use (leaked GUID → 403), and decrements the hold quota
+  (exhausted → 429). Anonymous joins are per-client (IP) fixed-window throttled (→ 429). §4.5 gate
+  met (atomic, rate replica-independent, leaked GUID insufficient, abuse bounded, poll+SignalR ok).
+- Current verification: 161 backend tests (60 unit + 101 integration, incl. 14 waiting-room, 6
   payment-race/reconciliation, 5 refund/scan/release across all strategies, and the messaging
   suite: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/
   consumer-retry/poison/topology-readiness/duplicate-ticket), plus frontend typecheck, lint,
@@ -569,8 +570,8 @@ This block supersedes older phase-progress lines above if they disagree.
   in ~13ms without touching Postgres. The test also caught and fixed a real bug: RedisAtomic
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
-- Immediate planned work: finish **PR 4 §4.3** in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`
-  (server-verifiable/event-bound/quota-limited admission grants + queue-abuse limits), then PR 5/6.
+- Immediate planned work: **PR 5** (auth session concurrency + proxy-aware rate limiting) and
+  **PR 6** (deployment/storage/health/ops) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`.
   Mock-interview reps follow the safety gates. Reserved seating and Elasticsearch remain paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
