@@ -671,6 +671,40 @@ Required tests:
 
 ## PR 6: Deployment, storage, health, and operational hardening
 
+**Status: DONE** on branch `feature/production-operations`.
+
+**§6.1 host split / §6.2 readiness.** One image, three profiles via `Hosting:Role` (`All` default /
+`Api` / `Worker`). The eight background workers register only on a worker-running role, so scaling
+the API's HTTP replicas can no longer multiply the admission valve or the scheduled scans. Readiness
+is role-aware: Postgres and Redis gate everywhere, but **RabbitMQ is an async dependency for the
+API** (a broker outage buffers the outbox instead of pulling API pods from the load balancer) and a
+hard readiness dependency only for a worker. A new non-gating `/health/detail` reports every
+dependency. k8s gains a separate `ticketing-worker` Deployment; a worker serves only the health
+probes.
+
+**§6.3 object storage.** `S3FileStorage` (AWSSDK.S3) behind the unchanged `IFileStorage` port -
+MinIO in dev/CI, S3 in prod, selected by `FileStorage:Provider`. Writes are idempotent/atomic
+(deterministic-key `PutObject`, no torn files or orphaned supersedes), with a bounded-retry bucket
+initializer. compose gains MinIO; k8s drops the multi-replica-hostile ReadWriteOnce ticket-files PVC
+in favour of a MinIO Deployment. (SDK v4's default checksum trailer, which MinIO rejects, is disabled
+via `WHEN_REQUIRED`.)
+
+**§6.4 observability + retention.** New metrics on the exported meter: ticket scan conflicts,
+waiting-room admitted (rate = actual global admission rate) + depth, payment/refund reconciliation
+backlog, and hold-expiry lag - joining the payment-outcome and PR 3 outbox/consumer metrics. A
+worker-only `RetentionService` prunes the unbounded bookkeeping tables (delivered outbox, dedupe
+marks, completed idempotency records, dead refresh tokens) on configurable windows, set-based and
+idempotent, never touching live rows.
+
+**§6.5 CI + ops.** CI now runs the Playwright golden journey against the **real compose stack**
+(exercising the API/worker split and object storage end to end), builds and scans both Dockerfiles
+(Trivy), fails on vulnerable NuGet/npm dependencies, and gates on `ef migrations
+has-pending-model-changes`. Dependabot automates dependency updates across NuGet/npm/Actions/Docker.
+
+**197 tests green (78 unit + 119 integration)** against real PostgreSQL/Redis/RabbitMQ/MinIO; Release
+build 0 warnings; migration parity clean; k8s manifests render. This completes the production safety
+hardening plan.
+
 Suggested branch: `feature/production-operations`
 
 ### 6.1 Separate API and workers

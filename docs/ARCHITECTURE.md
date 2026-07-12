@@ -90,6 +90,20 @@ What earns the "I would not split this yet, and here is exactly when I would" an
 
 Restraint is the senior signal. Splitting to fix messy code produces distributed messy code.
 
+### One deployable, two deployments (the API/worker split)
+
+The modular monolith stays one codebase and one image, but it runs as **two deployments** chosen by
+a single `Hosting:Role` setting (`Api` / `Worker` / `All`). The API pods serve HTTP and run no
+background workers; a separate worker deployment runs the outbox dispatcher, the consumers, hold
+expiry, payment/refund reconciliation, the waiting-room admission valve, and the retention sweep.
+This is not a microservice split — no business ownership moves, there are no new network contracts —
+it just stops HTTP scaling from multiplying an admission valve and scheduled scans, and lets the two
+tiers scale on their own signals. Readiness is role-aware to match: RabbitMQ is an **asynchronous**
+dependency for the API (a broker outage buffers the transactional outbox, so API pods keep serving)
+but a **hard** dependency for a worker, which cannot function without it. Blobs (ticket PDFs, event
+images) live in shared object storage (S3/MinIO) behind `IFileStorage`, so no pod-local disk or
+ReadWriteOnce volume constrains replica placement.
+
 ## The decisions that matter, each with its trade-off
 
 - **Multi-tenancy: shared schema + EF global query filters.** Cheapest to run, one migration set,

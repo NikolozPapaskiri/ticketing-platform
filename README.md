@@ -27,7 +27,7 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
 - Frontend milestones M0-M6 are complete in `apps/web` (M5 = the tkt.ge-style marketplace,
   M6 = the virtual waiting room: Redis-backed FIFO queue, rate-limited admission, SignalR
   position pushes, 429-enforced checkout on gated events).
-- Current verified backend suite: 176 tests (68 unit + 108 integration).
+- Current verified backend suite: 197 tests (78 unit + 119 integration).
 - The three oversell-prevention strategies are load-tested head-to-head under flash-sale
   concurrency — zero oversell across all three; numbers and analysis in
   [docs/LOAD_TEST.md](docs/LOAD_TEST.md).
@@ -39,10 +39,15 @@ a full customer checkout (hold with TTL → pay → ticket PDF).
   independent admission rate, with server-verifiable quota-limited grants), and **PR 5**
   (authentication session safety: family-scoped refresh tokens with atomic rotation + a grace
   window so parallel refreshes aren't mistaken for theft, server-side logout revocation,
-  proxy-aware rate limiting, and startup validation of security-sensitive options) are done — a
+  proxy-aware rate limiting, and startup validation of security-sensitive options), and **PR 6**
+  (operational hardening: an API/worker host split so HTTP scaling doesn't multiply background
+  work, role-aware readiness that treats RabbitMQ as async for the API, shared S3/MinIO object
+  storage behind the file port, operational metrics + a retention sweep for unbounded tables, and
+  CI that runs Playwright against the real stack + scans images + audits dependencies) are done — a
   payment in flight can't oversell, double-charge, be lost to a crash, or be double-refunded; a
-  ticket admits once; no event is silently lost; a leaked admission GUID alone can't reserve; and
-  concurrent refreshes neither fork a session nor revoke a legitimate one.
+  ticket admits once; no event is silently lost; a leaked admission GUID alone can't reserve;
+  concurrent refreshes neither fork a session nor revoke a legitimate one; and the API and workers
+  scale independently against shared, durable storage. The hardening plan is complete.
 - Current verified frontend checks: typecheck, lint, production build, npm audit, and the
   Playwright suite incl. the marketplace journey.
 - The usable product is the web UI at `http://localhost:3000`; `http://localhost:5000/` is the

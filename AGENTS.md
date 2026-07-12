@@ -544,11 +544,20 @@ This block supersedes older phase-progress lines above if they disagree.
   the family; BFF calls it before clearing cookies) + BFF single-flight. Proxy-aware rate limiting
   (ForwardedHeaders honoured only from configured trusted proxies, else X-Forwarded-For ignored).
   Startup validation rejects weak/dev/short JWT keys. Migration `AddRefreshTokenFamily`.
-- Current verification: 176 backend tests (68 unit + 108 integration, incl. 7 session/proxy: 5
-  session-safety + 2 proxy-rate-limit, 14 waiting-room, 6 payment-race/reconciliation, 5
-  refund/scan/release across all three reservation strategies, and 13 messaging tests: unroutable/
-  backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/consumer-retry/poison/
-  topology-readiness/duplicate-ticket),
+- Ops hardening (PR 6) is DONE: one image, three profiles via `Hosting:Role` (All/Api/Worker) - the
+  8 background workers run only on a worker role, so scaling HTTP replicas doesn't multiply the
+  admission valve/scheduled work; RabbitMQ is async for API readiness (broker outage buffers the
+  outbox, doesn't drop API pods), hard for a worker; `/health/detail` is non-gating. Shared object
+  storage (`S3FileStorage`/MinIO) behind `IFileStorage` replaces the RWO ticket-files PVC. New
+  metrics (scan conflicts, admission rate + depth, reconciliation backlog, expiry lag) + a
+  worker-only `RetentionService` prunes outbox/dedupe/idempotency/dead-refresh-token rows. CI runs
+  Playwright vs the real compose stack, builds+scans both Dockerfiles, audits NuGet/npm, and gates on
+  EF model parity; Dependabot enabled.
+- Current verification: 197 backend tests (78 unit + 119 integration, incl. 7 host-role/retention: 3
+  host-role + 3 S3-storage + 1 retention, 7 session/proxy, 14 waiting-room, 6
+  payment-race/reconciliation, 5 refund/scan/release across all three reservation strategies, and 13
+  messaging tests: unroutable/backoff/quarantine/broker-disconnect/crash-redeliver/versioned-envelope/
+  consumer-retry/poison/topology-readiness/duplicate-ticket),
   plus frontend typecheck, lint, production build, Playwright e2e, and a live API smoke.
 - Current run targets: web UI `http://localhost:3000`, API `http://localhost:5000`, OpenAPI JSON
   `http://localhost:5000/openapi/v1.json`. API `GET /` returns 404 by design.
@@ -558,9 +567,10 @@ This block supersedes older phase-progress lines above if they disagree.
   all three reservation strategies sold 300/300 with zero oversell; the test caught + fixed a
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
-- Immediate planned work: PR 6 (deployment/storage/health/ops incl. separate API/worker hosts and a
-  distributed login limiter) in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`. Mock-interview reps
-  follow the safety gates. Reserved seating and Elasticsearch remain optional and paused.
+- The production safety hardening plan (PR 1-6) is COMPLETE. Open follow-ups if desired: a
+  distributed login limiter, and the HMAC-signed join-token + join challenge for waiting-room queue
+  integrity (both noted in `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`). Mock-interview reps follow
+  the safety gates. Reserved seating and Elasticsearch remain optional and paused.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.
