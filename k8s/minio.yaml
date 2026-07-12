@@ -1,0 +1,73 @@
+# Shared object storage for ticket PDFs and event images. The API and worker Deployments talk to
+# it over the S3 API (Service DNS minio:9000), so a PDF written by the worker is readable by every
+# API replica - the ReadWriteOnce PVC problem the old ticket-files volume had is gone. MinIO stands
+# in for S3 locally; a real environment points FileStorage:S3:ServiceUrl at the cloud endpoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            # Root credentials come from the same Secret the app uses to authenticate to MinIO.
+            - name: MINIO_ROOT_USER
+              valueFrom: { secretKeyRef: { name: api-secrets, key: FileStorage__S3__AccessKey } }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: api-secrets, key: FileStorage__S3__SecretKey } }
+          ports:
+            - containerPort: 9000   # S3 API
+            - containerPort: 9001   # web console
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: 9000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /minio/health/live, port: 9000 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  selector: { app: minio }
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+---
+# RWO is fine here: only the single MinIO pod mounts the volume; the app reaches storage over the
+# network, not by sharing this disk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi

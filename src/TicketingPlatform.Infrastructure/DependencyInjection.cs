@@ -1,3 +1,5 @@
+using Amazon.Runtime;
+using Amazon.S3;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,7 +73,7 @@ public static class DependencyInjection
         // Ticket issuing: PDF generation + file storage behind ports. The consumer is worker-only;
         // the ports stay registered everywhere (the API streams stored PDFs to clients).
         services.AddSingleton<ITicketDocumentGenerator, QuestPdfTicketGenerator>();
-        services.AddSingleton<IFileStorage, LocalFileStorage>();
+        AddFileStorage(services, configuration);
         if (runsWorkers)
             services.AddHostedService<TicketIssuerConsumer>();
 
@@ -135,5 +137,42 @@ public static class DependencyInjection
             services.AddHostedService<WaitingRoomAdmitter>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Local filesystem in dev; S3/MinIO for genuinely shared, multi-replica-safe blob storage
+    /// (a ticket PDF written by one pod is readable by every other). The <see cref="IFileStorage"/>
+    /// port is identical either way, so no caller changes when the provider flips.
+    /// </summary>
+    private static void AddFileStorage(IServiceCollection services, IConfiguration configuration)
+    {
+        var provider = configuration["FileStorage:Provider"] ?? "Local";
+        if (!string.Equals(provider, "S3", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IFileStorage, LocalFileStorage>();
+            return;
+        }
+
+        var options = configuration.GetSection(S3StorageOptions.SectionName).Get<S3StorageOptions>() ?? new();
+        services.AddSingleton(options);
+        services.AddSingleton<IAmazonS3>(_ =>
+        {
+            var config = new AmazonS3Config
+            {
+                ForcePathStyle = options.ForcePathStyle,   // MinIO addresses buckets by path
+                AuthenticationRegion = options.Region,
+                // SDK v4 defaults to adding a flexible (CRC32) checksum trailer, which MinIO and
+                // other S3-compatible stores reject with an x-amz-content-sha256 mismatch. Only add
+                // checksums when the operation requires them - real AWS S3 is unaffected.
+                RequestChecksumCalculation = RequestChecksumCalculation.WHEN_REQUIRED,
+                ResponseChecksumValidation = ResponseChecksumValidation.WHEN_REQUIRED
+            };
+            if (!string.IsNullOrWhiteSpace(options.ServiceUrl))
+                config.ServiceURL = options.ServiceUrl;    // MinIO / non-AWS endpoint
+            return new AmazonS3Client(new BasicAWSCredentials(options.AccessKey, options.SecretKey), config);
+        });
+        services.AddSingleton<IFileStorage, S3FileStorage>();
+        // Ensure the bucket exists before the ticket issuer (or an API read) touches it.
+        services.AddHostedService<S3BucketInitializer>();
     }
 }

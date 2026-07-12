@@ -47,14 +47,5 @@ spec:
           resources:
             requests: { cpu: 250m, memory: 256Mi }
             limits: { cpu: "1", memory: 512Mi }
-          volumeMounts:
-            # The ticket issuer runs HERE now, so the worker is the writer of ticket PDFs while the
-            # API reads them. Sharing one ReadWriteOnce PVC only works on a single node; PR 6 §6.3
-            # replaces this with shared object storage (MinIO/S3) behind IFileStorage for real
-            # multi-node deployments.
-            - name: ticket-files
-              mountPath: /var/ticketing/files
-      volumes:
-        - name: ticket-files
-          persistentVolumeClaim:
-            claimName: ticket-files
+          # The ticket issuer runs here and writes PDFs to shared object storage (see minio.yaml)
+          # over the S3 API, which every API replica then reads - no shared filesystem needed.

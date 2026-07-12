@@ -12,7 +12,11 @@ data:
   ConnectionStrings__Redis: "redis:6379"
   RabbitMq__HostName: "rabbitmq"
   PaymentProvider__BaseUrl: "http://localhost:8080/dev-payment/"
-  FileStorage__Root: "/var/ticketing/files"
+  # Shared object storage over the S3 API (the in-cluster MinIO Service). Both the API and worker
+  # Deployments use this, so ticket PDFs are readable across replicas.
+  FileStorage__Provider: "S3"
+  FileStorage__S3__ServiceUrl: "http://minio:9000"
+  FileStorage__S3__BucketName: "ticketing-files"
 ---
 # Secrets go in a Secret, not the ConfigMap - even though in this LOCAL manifest the value is
 # the committed dev key, the shape is right: production replaces this object from a vault
@@ -24,3 +28,6 @@ metadata:
 type: Opaque
 stringData:
   Jwt__SigningKey: "DEV-ONLY-signing-key-ticketing-platform-local-0123456789"
+  # MinIO root credentials, shared by the MinIO Deployment and the app's S3 client.
+  FileStorage__S3__AccessKey: "minioadmin"
+  FileStorage__S3__SecretKey: "minioadmin"

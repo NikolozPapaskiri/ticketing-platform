@@ -51,13 +51,8 @@ spec:
           resources:
             requests: { cpu: 250m, memory: 256Mi }
             limits: { cpu: "1", memory: 512Mi }
-          volumeMounts:
-            - name: ticket-files
-              mountPath: /var/ticketing/files
-      volumes:
-        - name: ticket-files
-          persistentVolumeClaim:
-            claimName: ticket-files
+          # No file volume: ticket PDFs/images live in shared object storage (see minio.yaml),
+          # reachable by every replica over the S3 API.
 ---
 apiVersion: v1
 kind: Service
@@ -69,13 +64,3 @@ spec:
     - port: 80
       targetPort: 8080
   # Try it without an Ingress: kubectl -n ticketing port-forward svc/ticketing-api 5001:80
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ticket-files
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi
