@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
+using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Infrastructure.WaitingRoom;
 
 namespace TicketingPlatform.IntegrationTests;
@@ -19,6 +21,9 @@ public sealed class WaitingRoomApiFactory : TicketingApiFactory
         builder.UseSetting("WaitingRoom:AdmitBatchSize", "5");
         builder.UseSetting("WaitingRoom:AdmissionTtlSeconds", "300");
         builder.UseSetting("WaitingRoom:AdmitIntervalSeconds", "3600"); // background admitter out of the way
+        builder.UseSetting("WaitingRoom:AdmissionHoldQuota", "2");      // small quota so tests can exhaust it
+        builder.UseSetting("WaitingRoom:JoinRateLimit", "5");
+        builder.UseSetting("WaitingRoom:JoinRateWindowSeconds", "60");
     }
 }
 
@@ -30,10 +35,14 @@ public sealed class WaitingRoomApiFactory : TicketingApiFactory
 [Collection(nameof(WaitingRoomSafetyCollection))]
 public sealed class WaitingRoomSafetyTests
 {
+    private readonly WaitingRoomApiFactory _factory;
     private readonly RedisWaitingRoom _room;
 
-    public WaitingRoomSafetyTests(WaitingRoomApiFactory factory) =>
+    public WaitingRoomSafetyTests(WaitingRoomApiFactory factory)
+    {
+        _factory = factory;
         _room = factory.Services.GetRequiredService<RedisWaitingRoom>();
+    }
 
     [Fact]
     public async Task Admission_ScriptCannotPopWithoutGrant()
@@ -112,6 +121,97 @@ public sealed class WaitingRoomSafetyTests
         // admitter will actually process the newcomer.
         await _room.JoinAsync(eventId, Guid.NewGuid(), CancellationToken.None);
         Assert.Contains(eventId, await _room.GetActiveQueuesAsync(CancellationToken.None));
+    }
+
+    // ---- §4.3: server-verifiable, event-bound, quota-limited admission grants ----------------
+
+    [Fact]
+    public async Task Admission_ExpiredGrantCannotCreateHold()
+    {
+        var eventId = Guid.NewGuid();
+        var visitor = Guid.NewGuid();
+        await AdmitAsync(eventId, visitor);
+
+        // Simulate the grant's TTL lapsing by deleting the admission key directly in Redis.
+        var db = _factory.Services.GetRequiredService<IConnectionMultiplexer>().GetDatabase();
+        await db.KeyDeleteAsync($"wq:admit:{eventId}:{visitor}");
+
+        var outcome = await _room.TryConsumeAdmissionAsync(eventId, visitor, "customer:alice", CancellationToken.None);
+        Assert.Equal(AdmissionOutcome.NotAdmitted, outcome);
+    }
+
+    [Fact]
+    public async Task Admission_GrantCannotBeUsedForAnotherEvent()
+    {
+        var eventA = Guid.NewGuid();
+        var eventB = Guid.NewGuid();
+        var visitor = Guid.NewGuid();
+        await AdmitAsync(eventA, visitor);
+
+        Assert.Equal(AdmissionOutcome.Admitted,
+            await _room.TryConsumeAdmissionAsync(eventA, visitor, "customer:alice", CancellationToken.None));
+        // The grant is event-bound: the same visitor id is not admitted to a different event.
+        Assert.Equal(AdmissionOutcome.NotAdmitted,
+            await _room.TryConsumeAdmissionAsync(eventB, visitor, "customer:alice", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Admission_GrantCannotBeReusedBeyondQuota()
+    {
+        var eventId = Guid.NewGuid();
+        var visitor = Guid.NewGuid();
+        await AdmitAsync(eventId, visitor); // factory quota = 2
+
+        Assert.Equal(AdmissionOutcome.Admitted,
+            await _room.TryConsumeAdmissionAsync(eventId, visitor, "customer:alice", CancellationToken.None));
+        Assert.Equal(AdmissionOutcome.Admitted,
+            await _room.TryConsumeAdmissionAsync(eventId, visitor, "customer:alice", CancellationToken.None));
+        // Third use exceeds the quota - a single admission is not an open door.
+        Assert.Equal(AdmissionOutcome.QuotaExhausted,
+            await _room.TryConsumeAdmissionAsync(eventId, visitor, "customer:alice", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Admission_GrantBindsToFirstCustomerSoALeakedIdIsUseless()
+    {
+        var eventId = Guid.NewGuid();
+        var visitor = Guid.NewGuid();
+        await AdmitAsync(eventId, visitor);
+
+        // Alice uses it first -> the grant binds to Alice.
+        Assert.Equal(AdmissionOutcome.Admitted,
+            await _room.TryConsumeAdmissionAsync(eventId, visitor, "customer:alice", CancellationToken.None));
+        // Mallory learns the visitor id but is a different account -> refused.
+        Assert.Equal(AdmissionOutcome.WrongCustomer,
+            await _room.TryConsumeAdmissionAsync(eventId, visitor, "customer:mallory", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Admission_MultipleVisitorIdsAreRateLimitedBySessionOrClientPolicy()
+    {
+        var client = $"client-{Guid.NewGuid():N}"; // factory JoinRateLimit = 5 per window
+        var allowed = 0;
+        var throttled = 0;
+        for (var i = 0; i < 8; i++)
+        {
+            if (await _room.TryRegisterJoinAsync(client, CancellationToken.None)) allowed++;
+            else throttled++;
+        }
+
+        Assert.Equal(5, allowed);      // exactly the limit gets through
+        Assert.Equal(3, throttled);    // the rest (minting fresh positions) are throttled
+    }
+
+    private async Task AdmitAsync(Guid eventId, Guid visitorId)
+    {
+        await _room.JoinAsync(eventId, visitorId, CancellationToken.None);
+        for (var i = 0; i < 10; i++)
+        {
+            await _room.AdmitBatchAsync(eventId, CancellationToken.None);
+            if (await _room.IsAdmittedAsync(eventId, visitorId, CancellationToken.None)) return;
+            await Task.Delay(100);
+        }
+        throw new Xunit.Sdk.XunitException($"visitor {visitorId} was not admitted to {eventId}");
     }
 
     private static List<Guid> NewVisitors(int count) =>

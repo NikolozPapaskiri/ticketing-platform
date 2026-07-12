@@ -23,13 +23,18 @@ public sealed class WaitingRoomService
         _waitingRoom = waitingRoom;
     }
 
-    public async Task<Result<QueueStatusResponse>> JoinAsync(Guid eventId, Guid visitorId, CancellationToken ct)
+    public async Task<Result<QueueStatusResponse>> JoinAsync(
+        Guid eventId, Guid visitorId, string clientKey, CancellationToken ct)
     {
         var state = await _events.GetWaitingRoomStateAsync(eventId, ct);
         if (state is null || !state.OnSale)
             return Result<QueueStatusResponse>.NotFound($"Event '{eventId}' is not on sale.");
         if (!state.WaitingRoomEnabled)
             return Result<QueueStatusResponse>.Success(TriviallyAdmitted);
+
+        // Throttle joins per client so a script can't mint unlimited queue positions with fresh GUIDs.
+        if (!await _waitingRoom.TryRegisterJoinAsync(clientKey, ct))
+            return Result<QueueStatusResponse>.Throttled("Too many queue joins from this client; slow down.");
 
         var status = await _waitingRoom.JoinAsync(eventId, visitorId, ct);
         return Result<QueueStatusResponse>.Success(Map(status));

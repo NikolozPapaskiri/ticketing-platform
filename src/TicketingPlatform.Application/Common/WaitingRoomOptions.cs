@@ -26,6 +26,18 @@ public sealed class WaitingRoomOptions
     /// <summary>Token-bucket capacity: the largest burst of admissions allowed after an idle gap.</summary>
     public int AdmitBurst { get; init; } = 5;
 
+    /// <summary>
+    /// How many holds ONE admission may authorize before it is used up. A grant is not an
+    /// open door: it is consumed as it is spent, so a leaked visitor id can't reserve forever.
+    /// </summary>
+    public int AdmissionHoldQuota { get; init; } = 4;
+
+    /// <summary>Maximum queue joins one client (by IP) may make within the window below.</summary>
+    public int JoinRateLimit { get; init; } = 20;
+
+    /// <summary>Window for the per-client join rate limit (bounds queue-position minting).</summary>
+    public int JoinRateWindowSeconds { get; init; } = 60;
+
     public TimeSpan AdmitInterval => TimeSpan.FromSeconds(AdmitIntervalSeconds);
     public TimeSpan AdmissionTtl => TimeSpan.FromSeconds(AdmissionTtlSeconds);
 }

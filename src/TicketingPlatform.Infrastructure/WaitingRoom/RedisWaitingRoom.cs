@@ -56,13 +56,18 @@ public sealed class RedisWaitingRoom : IWaitingRoom
         local allowed = math.floor(math.min(tokens, batchMax, queueLen))
         if allowed < 0 then allowed = 0 end
 
+        local quota = tonumber(ARGV[9])
         local admitted = {}
         if allowed > 0 then
           local popped = redis.call('ZPOPMIN', KEYS[1], allowed)
           local i = 1
           while i <= #popped do
             local member = popped[i]
-            redis.call('SET', ARGV[2] .. member, '1', 'EX', ttl)
+            local akey = ARGV[2] .. member
+            -- The grant is a hash: a hold quota (spent as it is used) and, once bound, the
+            -- customer it belongs to. TTL keeps it short-lived.
+            redis.call('HSET', akey, 'quota', quota)
+            redis.call('EXPIRE', akey, ttl)
             admitted[#admitted + 1] = member
             i = i + 2
           end
@@ -79,6 +84,35 @@ public sealed class RedisWaitingRoom : IWaitingRoom
         end
 
         return { admitted, waiting }
+        """;
+
+    /// <summary>
+    /// Authorize a hold against a grant, atomically: 0=admitted (quota spent), 1=not admitted,
+    /// 2=wrong customer, 3=quota exhausted. Binds the grant to the customer on first use so a
+    /// leaked visitor id is useless to a different account. KEYS = admitKey; ARGV = customerKey.
+    /// </summary>
+    private const string ConsumeScript = """
+        if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
+        local bound = redis.call('HGET', KEYS[1], 'customer')
+        if bound == false or bound == '' then
+          redis.call('HSET', KEYS[1], 'customer', ARGV[1])
+        elseif bound ~= ARGV[1] then
+          return 2
+        end
+        local remaining = tonumber(redis.call('HGET', KEYS[1], 'quota') or '0')
+        if remaining <= 0 then return 3 end
+        redis.call('HINCRBY', KEYS[1], 'quota', -1)
+        return 0
+        """;
+
+    /// <summary>
+    /// Fixed-window join throttle: 1=allowed, 0=throttled. KEYS = counter; ARGV = limit, window.
+    /// </summary>
+    private const string JoinThrottleScript = """
+        local n = redis.call('INCR', KEYS[1])
+        if n == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2])) end
+        if n > tonumber(ARGV[1]) then return 0 end
+        return 1
         """;
 
     private readonly IConnectionMultiplexer _redis;
@@ -151,12 +185,37 @@ public sealed class RedisWaitingRoom : IWaitingRoom
                 _options.AdmitBatchSize,
                 _options.AdmissionTtlSeconds,
                 PositionsLimit,
-                TokenKeyTtlSeconds
+                TokenKeyTtlSeconds,
+                _options.AdmissionHoldQuota
             });
 
         var parts = (RedisResult[])result!;
         var admitted = ((RedisValue[])parts[0]!).Select(v => Guid.Parse((string)v!)).ToList();
         var stillWaiting = ((RedisValue[])parts[1]!).Select(v => Guid.Parse((string)v!)).ToList();
         return (admitted, stillWaiting);
+    }
+
+    public async Task<AdmissionOutcome> TryConsumeAdmissionAsync(
+        Guid eventId, Guid visitorId, string customerKey, CancellationToken ct)
+    {
+        var result = await _redis.GetDatabase().ScriptEvaluateAsync(ConsumeScript,
+            new RedisKey[] { AdmitKey(eventId, visitorId) },
+            new RedisValue[] { customerKey });
+
+        return (int)result switch
+        {
+            0 => AdmissionOutcome.Admitted,
+            2 => AdmissionOutcome.WrongCustomer,
+            3 => AdmissionOutcome.QuotaExhausted,
+            _ => AdmissionOutcome.NotAdmitted
+        };
+    }
+
+    public async Task<bool> TryRegisterJoinAsync(string clientKey, CancellationToken ct)
+    {
+        var result = await _redis.GetDatabase().ScriptEvaluateAsync(JoinThrottleScript,
+            new RedisKey[] { $"wq:join_rl:{clientKey}" },
+            new RedisValue[] { _options.JoinRateLimit, _options.JoinRateWindowSeconds });
+        return (int)result == 1;
     }
 }
