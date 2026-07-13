@@ -12,6 +12,9 @@ data:
   ConnectionStrings__Redis: "redis:6379"
   RabbitMq__HostName: "rabbitmq"
   PaymentProvider__BaseUrl: "http://localhost:8080/dev-payment/"
+  # Two API replicas => share one DataProtection key ring in Redis, so protected payloads validate
+  # across pods and survive restarts (a per-pod filesystem ring would not).
+  DataProtection__Provider: "Redis"
   # Shared object storage over the S3 API (the in-cluster MinIO Service). Both the API and worker
   # Deployments use this, so ticket PDFs are readable across replicas.
   FileStorage__Provider: "S3"
