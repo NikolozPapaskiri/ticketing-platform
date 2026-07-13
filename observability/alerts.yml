@@ -1,0 +1,66 @@
+# Prometheus alerting rules over the custom TicketingPlatform metrics. These are the
+# "a background worker is silently falling behind / money is stuck / poison is piling up"
+# signals - the ones you page on. Prometheus evaluates them and forwards firing alerts to
+# Alertmanager; add a real receiver (Slack/email/PagerDuty) in alertmanager.yml to route them.
+groups:
+  - name: ticketing-messaging
+    rules:
+      - alert: ConsumerDeadLettering
+        expr: increase(ticketing_consumer_dead_lettered[10m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "Messages are being dead-lettered"
+          description: "A consumer parked {{ $value }} message(s) in the DLQ in the last 10m - poison or exhausted retries."
+
+      - alert: OutboxBacklogAgeHigh
+        expr: max(ticketing_outbox_backlog_age) > 60000
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Outbox is not draining"
+          description: "Oldest undelivered outbox row is {{ $value }}ms old (>60s) - the dispatcher or broker is stuck."
+
+      - alert: OutboxQuarantined
+        expr: increase(ticketing_outbox_quarantined[15m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "Outbox rows quarantined"
+          description: "{{ $value }} outbox row(s) exhausted their publish-attempt budget in the last 15m."
+
+  - name: ticketing-money
+    rules:
+      - alert: PaymentReconciliationBacklog
+        expr: max(ticketing_payments_reconciliation_backlog) > 0
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "Payments awaiting reconciliation are not draining"
+          description: "{{ $value }} order(s) have had an expired payment lease for >15m - charges may be stuck in an unknown state."
+
+      - alert: RefundReconciliationBacklog
+        expr: max(ticketing_refunds_reconciliation_backlog) > 0
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "Refunds awaiting reconciliation are not draining"
+          description: "{{ $value }} refund(s) have been stale for >15m."
+
+  - name: ticketing-inventory
+    rules:
+      - alert: HoldExpiryLagHigh
+        expr: max(ticketing_holds_expiry_lag) > 60000
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hold-expiry worker is falling behind"
+          description: "Oldest just-expired hold was {{ $value }}ms overdue (>60s) - inventory is being released late."
+
+      - alert: TicketScanConflictSpike
+        expr: increase(ticketing_tickets_scan_conflicts[10m]) > 5
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "Spike in ticket scan conflicts"
+          description: "{{ $value }} double-entry scan attempts in the last 10m - a cloned/shared ticket or a broken scanner."

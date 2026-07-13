@@ -1,0 +1,67 @@
+{
+  "uid": "ticketing-messaging",
+  "title": "Ticketing — Messaging & Outbox",
+  "tags": ["ticketing"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Outbox backlog age (ms)",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(ticketing_outbox_backlog_age)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Dead-lettered (last 10m)",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum(increase(ticketing_consumer_dead_lettered[10m]))", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "DLQ depth (RabbitMQ)",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum(rabbitmq_queue_messages{queue=\"ticketing-dead-letter\"})", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Outbox published (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_outbox_published[5m]))", "legendFormat": "published", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Outbox returned / retried / quarantined (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ticketing_outbox_publish_returned[5m]))", "legendFormat": "returned", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "sum(rate(ticketing_outbox_retried[5m]))", "legendFormat": "retried", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "C", "expr": "sum(rate(ticketing_outbox_quarantined[5m]))", "legendFormat": "quarantined", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Consumer retried / dead-lettered (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ticketing_consumer_retried[5m]))", "legendFormat": "retried", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "sum(rate(ticketing_consumer_dead_lettered[5m]))", "legendFormat": "dead-lettered", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Outbox confirm latency (ms, p50/p95)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(ticketing_outbox_confirm_latency_bucket[5m])))", "legendFormat": "p50", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(ticketing_outbox_confirm_latency_bucket[5m])))", "legendFormat": "p95", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    }
+  ]
+}

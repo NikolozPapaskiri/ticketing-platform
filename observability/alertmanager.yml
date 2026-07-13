@@ -1,0 +1,12 @@
+# Minimal Alertmanager: groups and de-duplicates firing alerts. The default receiver has no
+# notifier wired (alerts are held/visible in the Alertmanager UI at :9093) - add a Slack/email/
+# PagerDuty config here to actually route them. Kept intentionally routing-only for local use.
+route:
+  receiver: default
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 3h
+
+receivers:
+  - name: default
