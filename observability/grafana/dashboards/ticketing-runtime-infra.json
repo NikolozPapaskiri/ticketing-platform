@@ -1,0 +1,62 @@
+{
+  "uid": "ticketing-runtime-infra",
+  "title": "Ticketing — Runtime & Infrastructure",
+  "tags": ["ticketing"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "description": "Runtime and infra exporter metrics. Exporter/runtime metric names are the exporters' standard names and may need a small adjustment once confirmed against the live stack.",
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Postgres up",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(pg_up)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Redis up",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(redis_up)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "RabbitMQ queues",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(rabbitmq_queues)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "RabbitMQ connections",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(rabbitmq_connections)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": ".NET GC collections (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum by (generation) (rate(process_runtime_dotnet_gc_collections_count[5m]))", "legendFormat": "gen {{generation}}", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": ".NET thread-pool queue length",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(process_runtime_dotnet_thread_pool_queue_length)", "legendFormat": "queue", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Postgres connections",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(pg_stat_database_numbackends)", "legendFormat": "backends", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Redis memory used (bytes)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(redis_memory_used_bytes)", "legendFormat": "used", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    }
+  ]
+}

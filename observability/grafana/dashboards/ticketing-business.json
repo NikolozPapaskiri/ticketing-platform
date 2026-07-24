@@ -1,0 +1,65 @@
+{
+  "uid": "ticketing-business",
+  "title": "Ticketing — Business KPIs",
+  "tags": ["ticketing"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Orders confirmed (range)",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(increase(ticketing_orders_confirmed[$__range]))", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Refunds (range)",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(increase(ticketing_orders_refunded[$__range]))", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Tickets scanned (range)",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(increase(ticketing_tickets_scanned[$__range]))", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Waiting-room depth (now)",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(ticketing_waiting_room_depth)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Confirmed vs refunded (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ticketing_orders_confirmed[10m]))", "legendFormat": "confirmed", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "sum(rate(ticketing_orders_refunded[10m]))", "legendFormat": "refunded", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Hold → order conversion",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Confirmed orders divided by hold attempts.",
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_orders_confirmed[30m])) / clamp_min(sum(rate(ticketing_holds_attempts[30m])), 0.0001)", "legendFormat": "conversion", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Waiting-room admission rate (per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_waiting_room_admitted[1m]))", "legendFormat": "admitted/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Oversell attempts blocked (hold conflicts, per sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ticketing_holds_conflicts[5m]))", "legendFormat": "conflicts/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    }
+  ]
+}

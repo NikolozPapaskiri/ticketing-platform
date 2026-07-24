@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ticketing
+
+# The monitoring stack, deployed as an add-on into the same namespace as the base app (apply the
+# base first: `kubectl apply -k k8s`). The stack's config is generated from the SAME files that
+# docker-compose.observability.yml mounts, so there is one source of truth. Those files live
+# outside this directory, so build with the relaxed load restrictor:
+#   kubectl kustomize --load-restrictor LoadRestrictionsNone k8s/monitoring | kubectl apply -f -
+# Then point the app at the collector (and expose MinIO metrics):
+#   kubectl -n ticketing set env deployment/ticketing-api deployment/ticketing-worker Otlp__Endpoint=http://otel-collector:4317
+#   kubectl -n ticketing set env deployment/minio MINIO_PROMETHEUS_AUTH_TYPE=public
+resources:
+  - stack.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: otel-collector-config
+    files:
+      - ../../observability/otel-collector.yaml
+  - name: prometheus-config
+    files:
+      - ../../observability/prometheus.yml
+      - ../../observability/alerts.yml
+  - name: alertmanager-config
+    files:
+      - ../../observability/alertmanager.yml
+  - name: tempo-config
+    files:
+      - ../../observability/tempo.yaml
+  - name: loki-config
+    files:
+      - ../../observability/loki-config.yaml
+  - name: grafana-datasources
+    files:
+      - ../../observability/grafana/provisioning/datasources/datasources.yaml
+  - name: grafana-dashboard-provider
+    files:
+      - ../../observability/grafana/provisioning/dashboards/provider.yaml
+  - name: grafana-dashboards
+    files:
+      - ../../observability/grafana/dashboards/ticketing-overview.json
+      - ../../observability/grafana/dashboards/ticketing-messaging.json
+      - ../../observability/grafana/dashboards/ticketing-checkout.json
+      - ../../observability/grafana/dashboards/ticketing-business.json
+      - ../../observability/grafana/dashboards/ticketing-runtime-infra.json

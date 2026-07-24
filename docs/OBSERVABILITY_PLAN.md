@@ -1,24 +1,37 @@
 # Observability plan — a monitoring surface for everything
 
-Status: P1–P4 done (in-app ops page + metrics/logs/traces stack + infra exporters); P5 (alerting +
-k8s overlay) outstanding
+Status: P1–P5 implemented — in-app ops page, full metrics/logs/traces stack, infra exporters,
+alert rules + Alertmanager, five Grafana dashboards, and a k8s monitoring overlay. Remaining: a live
+end-to-end run to confirm data flows into Grafana (Docker was unavailable at authoring time) and any
+resulting metric-name tweaks.
 Created: 2026-07-13
 Builds on: the `TicketingPlatform` OpenTelemetry meter, the `/health/detail` endpoint, and the
 distributed tracing already wired for HTTP in/out, Npgsql SQL, and the RabbitMQ hop.
 
-## Known gaps / next
+## P5 — what's now in
 
-- **P5 outstanding:** alert rules (Grafana Alerting / Alertmanager), a k8s `monitoring` overlay, and
-  the remaining curated dashboards (only "Ticketing — Overview" exists; checkout, messaging,
-  runtime/infra, and business-KPI dashboards are still to author).
-- **Not yet runtime-proven end to end:** the stack configs are validated against the real
-  collector/Prometheus/Loki/Tempo binaries and the merged compose is valid, but the full 12-container
-  stack has not been brought up with live traffic - so "data actually populating the Grafana panels"
-  is unconfirmed. The overview dashboard's metric names assume `add_metric_suffixes: false` on the
-  collector's Prometheus exporter and may need a panel tweak once real series are visible.
-- **Branch CI is red** because it is stacked on `feature/production-operations`, whose §6.5 CI has two
-  failing jobs (Trivy action version, e2e first run) - see `docs/PRODUCTION_SAFETY_HARDENING_PLAN.md`.
-  Those must be fixed for this PR to go green; nothing in the observability code itself is implicated.
+- **Alerting:** `observability/alerts.yml` (Prometheus rules over the custom metrics — dead-lettering,
+  outbox backlog/quarantine, payment/refund reconciliation backlog, hold-expiry lag, scan-conflict
+  spike) wired into Prometheus, forwarded to a minimal **Alertmanager** (`alertmanager.yml`; add a
+  Slack/email receiver to route). Alertmanager is also a Grafana datasource.
+- **Dashboards (5):** Overview, **Messaging & Outbox**, **Checkout & Payments**, **Business KPIs**,
+  and **Runtime & Infrastructure** — auto-loaded by the provisioning provider.
+- **k8s monitoring overlay:** `k8s/monitoring/` (standalone add-on in the `ticketing` namespace)
+  stands up the same collector/Prometheus/Alertmanager/Loki/Tempo/Grafana + exporters, generating the
+  ConfigMaps from the SAME `observability/` files (one source of truth). Build with
+  `kubectl kustomize --load-restrictor LoadRestrictionsNone k8s/monitoring`; wire the app with the two
+  `kubectl set env` lines in the kustomization header.
+
+## Remaining
+
+- **Live end-to-end confirmation:** Docker Desktop was down at authoring time, so the full stack was
+  not brought up with traffic — "data actually populating Grafana" is unconfirmed. Custom-metric names
+  are high-confidence (they follow `add_metric_suffixes: false` = dots→underscores, already used by
+  the overview dashboard); the **HTTP/.NET-runtime and infra-exporter** panel queries use the
+  exporters' standard names and may need a small tweak once real series are visible. To confirm:
+  bring up `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build`,
+  drive some traffic (e.g. run the Playwright golden journey), then check Prometheus `/targets` are up
+  and the Grafana panels populate.
 
 ## Objective
 
