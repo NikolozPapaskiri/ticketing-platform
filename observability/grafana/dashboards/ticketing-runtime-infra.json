@@ -38,13 +38,13 @@
       "id": 5, "type": "timeseries", "title": ".NET GC collections (per sec)",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "refId": "A", "expr": "sum by (generation) (rate(process_runtime_dotnet_gc_collections_count[5m]))", "legendFormat": "gen {{generation}}", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+      "targets": [{ "refId": "A", "expr": "sum(rate(dotnet_gc_collections_total[5m]))", "legendFormat": "collections/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
     },
     {
       "id": 6, "type": "timeseries", "title": ".NET thread-pool queue length",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "refId": "A", "expr": "max(process_runtime_dotnet_thread_pool_queue_length)", "legendFormat": "queue", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+      "targets": [{ "refId": "A", "expr": "max(dotnet_thread_pool_queue_length_total)", "legendFormat": "queue", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
     },
     {
       "id": 7, "type": "timeseries", "title": "Postgres connections",
