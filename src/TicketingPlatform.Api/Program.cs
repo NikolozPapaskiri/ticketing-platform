@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using Asp.Versioning;
 using Microsoft.AspNetCore.DataProtection;
+using StackExchange.Redis;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -62,17 +63,36 @@ builder.Services.AddApiVersioning(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
-if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+// DataProtection key ring. A filesystem ring is per-pod and ephemeral, so on multiple replicas each
+// pod protects with a different key - antiforgery tokens and any protected payload fail to validate
+// across pods and rotate on every restart. Provider=Redis shares ONE key ring across all replicas
+// (and survives restarts); FileSystem stays the single-instance/dev default. SetApplicationName must
+// match across instances for the ring to be shared.
+var dataProtectionProvider = builder.Configuration["DataProtection:Provider"] ?? "FileSystem";
+if (string.Equals(dataProtectionProvider, "Redis", StringComparison.OrdinalIgnoreCase))
 {
-    var keysPath = Path.IsPathRooted(dataProtectionKeysPath)
-        ? dataProtectionKeysPath
-        : Path.Combine(builder.Environment.ContentRootPath, dataProtectionKeysPath);
-
-    Directory.CreateDirectory(keysPath);
+    var redisConnection = builder.Configuration.GetConnectionString("Redis")
+        ?? throw new InvalidOperationException("DataProtection:Provider=Redis requires ConnectionStrings:Redis.");
+    // A dedicated multiplexer for the key ring (the shared app one is registered later in DI).
+    var keyRingRedis = ConnectionMultiplexer.Connect(redisConnection);
     builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
+        .PersistKeysToStackExchangeRedis(keyRingRedis, "ticketing:dataprotection:keys")
         .SetApplicationName("ticketing-platform");
+}
+else
+{
+    var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+    if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+    {
+        var keysPath = Path.IsPathRooted(dataProtectionKeysPath)
+            ? dataProtectionKeysPath
+            : Path.Combine(builder.Environment.ContentRootPath, dataProtectionKeysPath);
+
+        Directory.CreateDirectory(keysPath);
+        builder.Services.AddDataProtection()
+            .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
+            .SetApplicationName("ticketing-platform");
+    }
 }
 
 // --- Authentication: JWT bearer. The API validates issuer, audience, lifetime, and signature
