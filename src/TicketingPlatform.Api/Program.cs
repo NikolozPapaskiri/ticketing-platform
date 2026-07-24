@@ -216,9 +216,14 @@ if (reverseProxy.Enabled)
     });
 }
 
-// --- Rate limiting on the auth endpoints: cut brute force off BEFORE PBKDF2 burns CPU per
-// guess. Fixed window per client IP; limit configurable (tests raise it, prod keeps it tight).
-var authRequestsPerMinute = builder.Configuration.GetValue("RateLimiting:AuthRequestsPerMinute", 20);
+// --- Rate limiting on the auth endpoints: cut brute force off BEFORE PBKDF2 burns CPU per guess.
+// TWO layers, because the in-process window below is per-replica - with N replicas an attacker's
+// effective budget is N x the limit, so scaling out would silently weaken the guard. The shared
+// cross-replica budget is enforced in Redis by DistributedAuthRateLimitFilter (see AuthController);
+// this in-memory window stays as a cheap local guard that also covers a Redis outage.
+var rateLimiting = builder.Configuration.GetSection(RateLimitingOptions.SectionName).Get<RateLimitingOptions>() ?? new();
+builder.Services.AddSingleton(rateLimiting);
+builder.Services.AddScoped<DistributedAuthRateLimitFilter>();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -226,8 +231,8 @@ builder.Services.AddRateLimiter(options =>
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = authRequestsPerMinute,
-            Window = TimeSpan.FromMinutes(1),
+            PermitLimit = rateLimiting.AuthRequestsPerMinute,
+            Window = TimeSpan.FromSeconds(rateLimiting.AuthWindowSeconds),
             QueueLimit = 0 // reject immediately; queuing auth attempts helps nobody
         }));
 });

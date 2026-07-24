@@ -84,6 +84,8 @@ public static class DependencyInjection
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
         services.AddSingleton<IPasswordHasherService, PasswordHasherService>();
         services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
+        // Cross-replica rate limiting (auth brute force): counters in Redis, not process memory.
+        services.AddSingleton<IDistributedRateLimiter, RedisFixedWindowRateLimiter>();
 
         // Payment provider: typed client via IHttpClientFactory (handler pooling, DNS-safe)
         // with the standard resilience pipeline (retry + backoff + jitter, circuit breaker,
