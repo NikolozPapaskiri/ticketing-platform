@@ -6,7 +6,7 @@ groups:
   - name: ticketing-messaging
     rules:
       - alert: ConsumerDeadLettering
-        expr: increase(ticketing_consumer_dead_lettered[10m]) > 0
+        expr: increase(ticketing_consumer_dead_lettered_total[10m]) > 0
         for: 0m
         labels: { severity: page }
         annotations:
@@ -14,7 +14,7 @@ groups:
           description: "A consumer parked {{ $value }} message(s) in the DLQ in the last 10m - poison or exhausted retries."
 
       - alert: OutboxBacklogAgeHigh
-        expr: max(ticketing_outbox_backlog_age) > 60000
+        expr: max(ticketing_outbox_backlog_age_milliseconds) > 60000
         for: 5m
         labels: { severity: page }
         annotations:
@@ -22,7 +22,7 @@ groups:
           description: "Oldest undelivered outbox row is {{ $value }}ms old (>60s) - the dispatcher or broker is stuck."
 
       - alert: OutboxQuarantined
-        expr: increase(ticketing_outbox_quarantined[15m]) > 0
+        expr: increase(ticketing_outbox_quarantined_total[15m]) > 0
         for: 0m
         labels: { severity: page }
         annotations:
@@ -50,7 +50,7 @@ groups:
   - name: ticketing-inventory
     rules:
       - alert: HoldExpiryLagHigh
-        expr: max(ticketing_holds_expiry_lag) > 60000
+        expr: max(ticketing_holds_expiry_lag_milliseconds) > 60000
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -58,7 +58,7 @@ groups:
           description: "Oldest just-expired hold was {{ $value }}ms overdue (>60s) - inventory is being released late."
 
       - alert: TicketScanConflictSpike
-        expr: increase(ticketing_tickets_scan_conflicts[10m]) > 5
+        expr: increase(ticketing_tickets_scan_conflicts_total[10m]) > 5
         for: 0m
         labels: { severity: warning }
         annotations:

@@ -1,9 +1,8 @@
 # Observability plan — a monitoring surface for everything
 
-Status: P1–P5 implemented — in-app ops page, full metrics/logs/traces stack, infra exporters,
-alert rules + Alertmanager, five Grafana dashboards, and a k8s monitoring overlay. Remaining: a live
-end-to-end run to confirm data flows into Grafana (Docker was unavailable at authoring time) and any
-resulting metric-name tweaks.
+Status: **P1–P5 done and verified end-to-end against the live stack** — in-app ops page, full
+metrics/logs/traces stack, infra exporters, alert rules + Alertmanager, five Grafana dashboards, and
+a k8s monitoring overlay.
 Created: 2026-07-13
 Builds on: the `TicketingPlatform` OpenTelemetry meter, the `/health/detail` endpoint, and the
 distributed tracing already wired for HTTP in/out, Npgsql SQL, and the RabbitMQ hop.
@@ -22,16 +21,35 @@ distributed tracing already wired for HTTP in/out, Npgsql SQL, and the RabbitMQ 
   `kubectl kustomize --load-restrictor LoadRestrictionsNone k8s/monitoring`; wire the app with the two
   `kubectl set env` lines in the kustomization header.
 
-## Remaining
+## Verified end-to-end (live stack + real traffic)
 
-- **Live end-to-end confirmation:** Docker Desktop was down at authoring time, so the full stack was
-  not brought up with traffic — "data actually populating Grafana" is unconfirmed. Custom-metric names
-  are high-confidence (they follow `add_metric_suffixes: false` = dots→underscores, already used by
-  the overview dashboard); the **HTTP/.NET-runtime and infra-exporter** panel queries use the
-  exporters' standard names and may need a small tweak once real series are visible. To confirm:
-  bring up `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build`,
-  drive some traffic (e.g. run the Playwright golden journey), then check Prometheus `/targets` are up
-  and the Grafana panels populate.
+Brought the full stack up, drove traffic (logins, catalog browse, and the Playwright golden journey
+so the counters fired), and confirmed every pillar:
+
+- **Metrics:** all 6 Prometheus targets up (`ticketing-app`, `postgres`, `redis`, `rabbitmq`,
+  `rabbitmq-detailed`, `minio`); every dashboard/alert expression returns data.
+- **Logs:** Loki has the `ticketing-api` stream, and the lines carry `TraceId`/`SpanId` — so
+  log↔trace correlation works.
+- **Traces:** Tempo holds `ticketing-api` traces including `postgresql` spans.
+- **Alerting:** all 7 rules loaded by Prometheus, Alertmanager discovered and active.
+- **Grafana:** all 5 dashboards and all 4 datasources provisioned.
+
+**Metric names had to be corrected** (the predicted tweak). Despite `add_metric_suffixes: false`, the
+collector's Prometheus exporter emits OpenTelemetry-conventional names: counters gain `_total`
+(`ticketing_orders_confirmed_total`) and instruments carry their unit
+(`ticketing_outbox_backlog_age_milliseconds`, `http_server_request_duration_seconds_*`). The .NET
+runtime metrics use the `dotnet_*` prefix, not `process_runtime_dotnet_*`. All queries now use the
+observed names.
+
+**RabbitMQ per-queue metrics needed a second scrape job.** The plugin's default endpoint aggregates
+across queues (no `queue` label), so the DLQ-depth panel could never have matched. A
+`rabbitmq-detailed` job scrapes `/metrics/detailed?family=queue_coarse_metrics`, giving
+`rabbitmq_detailed_queue_messages{queue="ticketing-dead-letter"}`.
+
+To reproduce: `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build`,
+drive traffic, then Grafana at <http://localhost:3001> and Prometheus targets at
+<http://localhost:9090/targets>. Note OTLP metrics export on a ~60s interval, so panels take about a
+minute to populate.
 
 ## Objective
 
