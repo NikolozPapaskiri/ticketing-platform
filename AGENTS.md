@@ -568,7 +568,8 @@ This block supersedes older phase-progress lines above if they disagree.
   RedisAtomic bug (winners fought the xmin token on the DB mirror write - now one atomic
   ExecuteUpdate in the hold-insert transaction).
 - The production safety hardening plan (PR 1-6) is IMPLEMENTED and pushed (branches unmerged).
-  Deferred optional follow-ups: a distributed login limiter, and the HMAC-signed join-token + join
+  Distributed login limiter: DONE (Redis fixed-window budget + MVC filter on the auth controller;
+  in-process window kept as the fail-open backstop). Remaining deferred follow-up: the HMAC-signed join-token + join
   challenge for waiting-room queue integrity (both noted in the plan). Reserved seating and
   Elasticsearch remain optional and paused.
 - PR 6's §6.5 CI (only YAML-validated at authoring) had two real failures on the first real run,

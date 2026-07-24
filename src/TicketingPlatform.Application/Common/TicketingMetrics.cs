@@ -81,6 +81,10 @@ public static class TicketingMetrics
     public static readonly Counter<long> TicketScanConflicts =
         Meter.CreateCounter<long>("ticketing.tickets.scan_conflicts");
 
+    /// <summary>Auth attempts rejected by the shared cross-replica limiter - the brute-force signal.</summary>
+    public static readonly Counter<long> AuthRateLimited =
+        Meter.CreateCounter<long>("ticketing.auth.rate_limited");
+
     /// <summary>Visitors admitted from the waiting room. Its rate IS the actual global admission rate.</summary>
     public static readonly Counter<long> WaitingRoomAdmitted =
         Meter.CreateCounter<long>("ticketing.waiting_room.admitted");

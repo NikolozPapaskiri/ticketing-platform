@@ -632,9 +632,20 @@ cleared local cookies). It always returns 204 (idempotent, no token-validity ora
 `UseForwardedHeaders` rewrites the client IP from `X-Forwarded-For` **only** when the immediate peer
 is a configured proxy/network, before the limiter partitions on it; with nothing configured the
 header is ignored so it cannot be forged to dodge or poison the per-IP window. The default-trust
-loopback lists are cleared and replaced with only the configured proxies. (Login limits stay
-per-instance for now - a fixed-window-per-IP guard in front of PBKDF2; a distributed limiter is
-deferred to §6 with the other multi-replica ops concerns.)
+loopback lists are cleared and replaced with only the configured proxies.
+
+**Login limits are now distributed (follow-up, DONE).** The per-instance window multiplied with
+replica count (N replicas = N x the budget), so scaling out weakened the guard. `IDistributedRateLimiter`
++ `RedisFixedWindowRateLimiter` (one atomic Lua `INCR`/`EXPIRE`, self-expiring counter, **fails open**
+if Redis is down) is applied to the auth controller by `DistributedAuthRateLimitFilter`, which
+short-circuits with 429 before the action - and therefore before PBKDF2. Both layers remain: the
+in-process window is a cheap local guard and the fail-open backstop
+(`RateLimiting:AuthRequestsPerMinute`), while `RateLimiting:GlobalAuthRequestsPerMinute` is the shared,
+replica-count-independent policy. Rejections increment `ticketing.auth.rate_limited`. Tests: two
+limiter instances (two "replicas") share one budget, separate clients keep separate budgets, the
+window refills, and a login flood is cut off with the in-process window disabled. **Still deliberately
+out of scope:** per-account failed-attempt limits (they add an account-lockout DoS vector, so that
+needs an explicit product decision).
 
 **Security-sensitive options are validated at startup** (`SecurityOptionsValidation.ValidateJwt`):
 a missing/short (<32-byte) signing key, a leftover `DEV-ONLY` key in a non-Development environment,
@@ -656,7 +667,7 @@ Suggested branch: `feature/session-safety`
 - Add a BFF single-flight refresh mechanism or a server-side rotation grace/session-version
   design suitable for multiple web replicas.
 - Configure trusted forwarded headers before IP-based rate limiting.
-- Decide whether login limits must be distributed across API replicas.
+- Decide whether login limits must be distributed across API replicas. **(Decided + implemented: yes - see the distributed-limits paragraph above.)**
 - Validate security-sensitive options at startup.
 
 Required tests:

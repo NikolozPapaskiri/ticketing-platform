@@ -598,7 +598,9 @@ This block supersedes older phase-progress lines above if they disagree.
   winners fought each other's xmin token on the DB mirror write (6k+ 500s) — now a single
   atomic `ExecuteUpdate` in the same transaction as the hold insert.
 - The production safety hardening plan (**PR 1-6**) is **IMPLEMENTED and pushed** (branches
-  unmerged). Deferred optional follow-ups noted in the plan: a distributed login limiter, and an
+  unmerged). **Distributed login limiter: DONE** (`IDistributedRateLimiter` + Redis fixed window +
+  `DistributedAuthRateLimitFilter`; per-replica window kept as the fail-open backstop). Remaining
+  deferred follow-up noted in the plan: an
   HMAC-signed join-token + join challenge for waiting-room queue integrity. Reserved seating and
   Elasticsearch remain paused.
 - **PR 6 §6.5 CI** (only YAML-validated at authoring) had two real failures on first run, **now

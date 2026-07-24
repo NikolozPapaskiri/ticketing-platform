@@ -4,6 +4,7 @@ using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using TicketingPlatform.Api.Auth;
 using TicketingPlatform.Api.Tenancy;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Contracts;
@@ -14,7 +15,8 @@ namespace TicketingPlatform.Api.Controllers;
 
 [ApiController]
 [ApiVersion("1.0")]
-[EnableRateLimiting("auth")] // brute-force guard: fixed window per client IP
+[EnableRateLimiting("auth")]                                 // per-replica in-process window
+[ServiceFilter(typeof(DistributedAuthRateLimitFilter))]      // shared cross-replica budget (Redis)
 [Route("api/v{version:apiVersion}/auth")]
 public class AuthController : ControllerBase
 {

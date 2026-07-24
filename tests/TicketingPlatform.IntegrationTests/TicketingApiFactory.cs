@@ -55,7 +55,10 @@ public class TicketingApiFactory : WebApplicationFactory<Program>, IAsyncLifetim
         builder.UseSetting("RabbitMq:ConsumerMaxAttempts", "3");
         builder.UseSetting("PaymentProvider:BaseUrl", PaymentProvider.Urls[0] + "/");
         builder.UseSetting("PaymentProvider:RetryBaseDelayMs", "50"); // fast retry storms in tests
-        builder.UseSetting("RateLimiting:AuthRequestsPerMinute", "100000"); // the suite logs in constantly
+        // The suite logs in constantly from one IP, so raise BOTH limiter layers out of the way:
+        // the in-process window and the shared Redis budget (dedicated factories lower them).
+        builder.UseSetting("RateLimiting:AuthRequestsPerMinute", "100000");
+        builder.UseSetting("RateLimiting:GlobalAuthRequestsPerMinute", "100000");
         builder.UseSetting("WaitingRoom:AdmitBatchSize", "1");   // one admission per tick => positions observable
         builder.UseSetting("WaitingRoom:AdmitIntervalSeconds", "1"); // fast valve so queue tests finish in seconds
         // No rotation grace by default: the shared suite asserts that an immediately-replayed
