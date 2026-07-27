@@ -40,10 +40,27 @@ Everything else on the backlog is new product or new platform capability, not un
 
 ---
 
-## Track 1 — Gate 0: close the safety gate (do this first)
+## Track 1 — Gate 0 — **G1–G4 DONE** *(branch `feature/gate0-money-safety`)*
 
-Small, bounded, and it is the last thing standing between the current build and "money handling I
-would defend in a review". Roughly one PR.
+Small, bounded, and it was the last thing standing between the current build and "money handling I
+would defend in a review".
+
+**Shipped:** **G1** refund-status inquiry — recovery asks the provider instead of re-issuing and
+trusting the stable key to dedupe; `Refunded` settles from provider truth without moving money
+again, `Pending` waits for the next scan, and `NotRefunded`/`Unknown` fall back to the previous keyed
+retry so a provider without a status endpoint is no worse off. **G2** the `ProviderUnavailable` path
+saves with `TrySaveChangesAsync` and reports whatever the winner settled, instead of throwing a 500
+on the one path whose purpose is graceful degradation. **G3** `Order.RefundInitiatedByActor`,
+recorded at claim time and carried into the `OrderRefunded` event so the reconciler cannot erase who
+asked. **G4** `RevertRefundClaim` clears the claim metadata. Migration `AddRefundInitiator` (one
+nullable column). 219 tests green (86 unit + 133 integration).
+
+**Not built, deliberately:** G5 — per its own instruction below.
+
+**Still outstanding:** the G2 deterministic retry-versus-reconciler race test. The code change is in
+and the suite is green, but pinning the conflict branch needs a new lease-extension gate in
+`FaultInterceptor` (the existing gates cover idempotency claim, ticket scan, and hold release). By
+the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until that exists.
 
 ### G1. Refund-status inquiry — *P1*
 Add `GetRefundStatusAsync(refundIdempotencyKey)` returning `Refunded(providerRefundId) |
