@@ -66,13 +66,18 @@ learned and are worth not re-discovering:
    distinguish an **extension** from the initial **claim**: both leave the hold `PaymentPending` with
    a modified lease, but the claim also writes `Status`. Gating on the claim by mistake makes the test
    exercise the "hold no longer available" 409 path instead of the ambiguous-payment one.
-2. Bumping the hold row underneath the frozen save with `ExecuteUpdateAsync` (which bypasses the
-   change tracker, so it does not trip the gate) did **not** produce the expected
-   `DbUpdateConcurrencyException`. Why is unresolved — candidates: the lease value being written is
-   unchanged so EF emits no `UPDATE` for the hold at all (this factory uses a 600s lease, so two
-   `GetUtcNow()` calls milliseconds apart may not differ enough to matter), or the arrival observed at
-   the gate came from a different DbContext than the request's. Start by asserting the client's save
-   actually conflicts before asserting the HTTP status.
+2. **The concurrency mechanism itself is proven reachable**, so the fault was in the HTTP
+   orchestration rather than the model. `LeaseConcurrencyDiagnosticTests` pins it directly: load a
+   `PaymentPending` hold, let another writer move the row with `ExecuteUpdateAsync`, extend the lease
+   on the stale snapshot, and `SaveChangesAsync` throws `DbUpdateConcurrencyException`. That test is
+   kept — it is the invariant G2's conflict branch depends on. It also asserts the lease value
+   actually changed, because writing the value the row already holds produces no `UPDATE` and
+   therefore no conflict, which is the trap to avoid when building the HTTP-level version.
+
+   What remains unexplained is why the HTTP attempt saw a gate arrival yet its save did not conflict.
+   The next debugging step is to identify **which `DbContext` arrives at the gate** (log or capture the
+   instance) before asserting anything about the response — the arrival may not have been the
+   request's.
 
 By the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until this exists.
 
