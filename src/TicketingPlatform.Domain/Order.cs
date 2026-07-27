@@ -38,6 +38,12 @@ public class Order
     /// <summary>When a refund was claimed (RefundPending). Lets the reconciler find stuck refunds.</summary>
     public DateTimeOffset? RefundClaimedAt { get; private set; }
 
+    /// <summary>
+    /// Who asked for the refund - the customer, the staff member, or a background process. Recorded
+    /// when the claim is made, so it survives the reconciler finishing the job on their behalf.
+    /// </summary>
+    public string? RefundInitiatedByActor { get; private set; }
+
     public void MarkConfirmed(string providerChargeId)
     {
         if (Status != OrderStatus.PendingPayment)
@@ -58,12 +64,15 @@ public class Order
     /// row's concurrency token so only one caller (customer or staff) owns the money movement;
     /// the loser resolves to this same order instead of issuing a second provider refund.
     /// </summary>
-    public void MarkRefundPending(DateTimeOffset now)
+    public void MarkRefundPending(DateTimeOffset now, string initiatedByActor)
     {
         if (Status != OrderStatus.Confirmed)
             throw new InvalidOperationException($"Cannot start a refund for an order in status '{Status}'.");
         Status = OrderStatus.RefundPending;
         RefundClaimedAt = now;
+        // Recorded at CLAIM time, not at completion: the reconciler may be the one that finishes
+        // the job, and "who asked for this money to leave" is the first question in any dispute.
+        RefundInitiatedByActor = initiatedByActor;
     }
 
     public void MarkRefunded(string providerRefundId, DateTimeOffset refundedAt)
@@ -75,12 +84,19 @@ public class Order
         RefundedAt = refundedAt;
     }
 
-    /// <summary>An ambiguous refund settled as "no refund happened": RefundPending -> Confirmed.</summary>
+    /// <summary>
+    /// An ambiguous refund settled as "no refund happened": RefundPending -> Confirmed. Clears the
+    /// claim metadata too - leaving RefundClaimedAt set on a Confirmed order makes the row carry a
+    /// lie, and the next query written against that column would inherit it. The stale-refund scan
+    /// also filters on status today, so this is hygiene rather than a live bug.
+    /// </summary>
     public void RevertRefundClaim()
     {
         if (Status != OrderStatus.RefundPending)
             throw new InvalidOperationException($"Cannot revert a refund claim from status '{Status}'.");
         Status = OrderStatus.Confirmed;
+        RefundClaimedAt = null;
+        RefundInitiatedByActor = null;
     }
 }
 
