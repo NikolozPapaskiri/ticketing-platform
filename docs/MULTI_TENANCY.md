@@ -200,11 +200,20 @@ the number of tenant-scoped tables.
    established on the first two, so their filter bypass exists **solely for the reconciler**. They
    are named `SystemScope.AuthorizedWriteCore` — the name is the reminder that authorization
    happened upstream.
-4. **One genuine finding, deliberately not fixed.** `GetImagePathAsync` has no `OnSale` predicate,
-   so the image path of a *draft* event is reachable by id — every other public read restricts to
-   published. Fixing it is a behaviour change, so T1 (a zero-behaviour-change refactor) preserved
-   it behind the deliberately uncomfortable name `PublicScope.EventsIncludingUnpublished`. Worth a
-   follow-up decision.
+4. **The unpublished-event read is deliberate, not a bug.** `GetImagePathAsync` has no `OnSale`
+   predicate, which looks like a leak next to every other public read — but `IEventRepository`
+   documents it as intentional ("image path regardless of status; organizers preview drafts"). It
+   is preserved, now behind the deliberately uncomfortable name
+   `PublicScope.EventsIncludingUnpublished` so it cannot spread quietly. The residual question is a
+   product one, not a refactor one: an anonymous caller who knows an event id can fetch a draft
+   event's image. Acceptable while organizer preview uses the same anonymous endpoint; revisit if
+   draft artwork ever becomes commercially sensitive.
+
+Public reads also stopped returning entities: `ListPublicOnSale`, `GetPublicOnSaleWithGraph`, and
+`GetMarketplaceEvent` now project to `PublicEventRow` / `PublicEventDetail` /
+`MarketplaceEventDetail` rows in SQL, so no `Event` can carry a private field across the public
+boundary. The only entity-returning methods left on the port are the tenant-plane ones, which is
+correct — staff operate on their own tenant's entities under the filter.
 
 `TenantScope` also now **fails closed**: previously a missing tenant made the filter compare
 `TenantId == null`, match nothing, and return an empty result indistinguishable from "no data" —
