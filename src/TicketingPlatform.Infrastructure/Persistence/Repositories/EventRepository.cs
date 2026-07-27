@@ -63,7 +63,8 @@ public sealed class EventRepository : IEventRepository
     public Task<Tenant?> GetTenantBySlugAsync(string slug, CancellationToken ct) =>
         _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Slug == slug, ct);
 
-    public async Task<IReadOnlyList<Event>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct) =>
+    public async Task<IReadOnlyList<PublicEventRow>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct) =>
+        // Projected in SQL: the public plane never materialises an Event entity.
         await _public.OnSaleEvents()
             .AsNoTracking()
             .Where(e => e.TenantId == tenantId)
@@ -71,18 +72,23 @@ public sealed class EventRepository : IEventRepository
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .Select(e => new PublicEventRow(e.Id, e.Name, e.VenueName, e.StartsAt))
             .ToListAsync(ct);
 
     public Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct) =>
         _public.OnSaleEvents()
             .CountAsync(e => e.TenantId == tenantId, ct);
 
-    public Task<Event?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct) =>
+    public Task<PublicEventDetail?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct) =>
         _public.OnSaleEvents()
             .AsNoTracking()
-            .Include(e => e.TicketTypes)
-                .ThenInclude(tt => tt.Inventory)
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.TenantId == tenantId, ct);
+            .Where(e => e.Id == eventId && e.TenantId == tenantId)
+            .Select(e => new PublicEventDetail(
+                e.Id, e.Name, e.Description, e.VenueName, e.StartsAt, e.WaitingRoomEnabled,
+                e.TicketTypes.Select(tt => new PublicTicketTypeRow(
+                    tt.Id, tt.Name, tt.Price, tt.Currency,
+                    tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()))
+            .FirstOrDefaultAsync(ct);
 
     // --- Marketplace: the cross-tenant catalog. Composable IQueryable, filters applied only
     // when present (same deferred-execution pattern as the staff browse).
@@ -140,19 +146,19 @@ public sealed class EventRepository : IEventRepository
                     e.TicketTypes.OrderBy(tt => tt.Price).Select(tt => tt.Currency).FirstOrDefault()))
             .ToListAsync(ct);
 
-    public async Task<MarketplaceEventDetail?> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct)
-    {
-        var ev = await _public.OnSaleEvents()
+    public Task<MarketplaceEventDetail?> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct) =>
+        // One projected query instead of entity + follow-up tenant read. Tenants carry no query
+        // filter (top-level owners), so the join works anonymously.
+        _public.OnSaleEvents()
             .AsNoTracking()
-            .Include(e => e.TicketTypes)
-                .ThenInclude(tt => tt.Inventory)
-            .FirstOrDefaultAsync(e => e.Id == eventId, ct);
-        if (ev is null)
-            return null;
-
-        var tenant = await _db.Tenants.AsNoTracking().FirstAsync(t => t.Id == ev.TenantId, ct);
-        return new MarketplaceEventDetail(ev, tenant.Name, tenant.Slug);
-    }
+            .Where(e => e.Id == eventId)
+            .Join(_db.Tenants, e => e.TenantId, t => t.Id, (e, t) => new MarketplaceEventDetail(
+                e.Id, e.Name, e.Description, e.VenueName, e.StartsAt, e.Category,
+                t.Name, t.Slug, e.ImagePath != null, e.WaitingRoomEnabled,
+                e.TicketTypes.Select(tt => new PublicTicketTypeRow(
+                    tt.Id, tt.Name, tt.Price, tt.Currency,
+                    tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()))
+            .FirstOrDefaultAsync(ct);
 
     public async Task<string?> GetImagePathAsync(Guid eventId, CancellationToken ct) =>
         await _public.EventsIncludingUnpublished()

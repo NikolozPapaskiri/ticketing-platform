@@ -102,8 +102,8 @@ public sealed class EventService
                     tt.Name,
                     tt.Price,
                     tt.Currency,
-                    tt.Inventory.TotalQuantity,
-                    tt.Inventory.AvailableQuantity)).ToList()));
+                    tt.TotalQuantity,
+                    tt.AvailableQuantity)).ToList()));
     }
 
     public async Task<Result<EventResponse>> GetByIdAsync(Guid tenantId, Guid id, CancellationToken ct)
@@ -258,13 +258,13 @@ public sealed class EventService
         if (detail is null)
             return Result<MarketplaceEventDetailResponse>.NotFound($"Event '{eventId}' was not found.");
 
-        var ev = detail.Event;
         return Result<MarketplaceEventDetailResponse>.Success(new MarketplaceEventDetailResponse(
-            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Category.ToString(),
-            detail.TenantName, detail.TenantSlug, ev.ImagePath is not null, ev.WaitingRoomEnabled,
-            ev.TicketTypes.Select(tt => new TicketTypeResponse(
+            detail.Id, detail.Name, detail.Description, detail.VenueName, detail.StartsAt,
+            detail.Category.ToString(), detail.TenantName, detail.TenantSlug, detail.HasImage,
+            detail.WaitingRoomEnabled,
+            detail.TicketTypes.Select(tt => new TicketTypeResponse(
                 tt.Id, tt.Name, tt.Price, tt.Currency,
-                tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()));
+                tt.TotalQuantity, tt.AvailableQuantity)).ToList()));
     }
 
     // --- Event image: stored via the IFileStorage port, streamed anonymously for the catalog.
