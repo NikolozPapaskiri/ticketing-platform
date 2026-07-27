@@ -85,6 +85,57 @@ public sealed class PaymentReconciliationTests
         Assert.Equal(1, _factory.Gateway.DistinctRefundCount);
     }
 
+    [Fact]
+    public async Task Reconciler_SettlesStrandedRefund_FromProviderTruth_NotByReissuing()
+    {
+        // Gate 0 / G1. Recovery used to re-call RefundAsync and trust the stable key to dedupe -
+        // an assumption about the provider's idempotency-record retention rather than a guarantee,
+        // and one that cannot tell "completed, response lost" from "still processing" from "never
+        // happened". The reconciler now ASKS, because the provider is the authority on whether
+        // money moved.
+        var (customerToken, holdId) = await ArrangeOnSaleHoldAsync();
+        var orderResponse = await PostOrderAsync(customerToken, holdId, "refund-inquiry");
+        orderResponse.EnsureSuccessStatusCode();
+        var orderId = (await orderResponse.Content.ReadFromJsonAsync<OrderDto>(ApiClientExtensions.Json))!.Id;
+
+        _factory.Fault.FailNextRefundSettleSave = true;
+        var crashed = await _client.PostAsAsync(customerToken, $"/api/v1/customer/orders/{orderId}/refund");
+        Assert.Equal(HttpStatusCode.InternalServerError, crashed.StatusCode);
+        var refundsBeforeRecovery = _factory.Gateway.DistinctRefundCount;
+        Assert.Equal(1, refundsBeforeRecovery);
+
+        var settled = await PollAsync(async () => await OrdersInStatusAsync(orderId, OrderStatus.Refunded) == 1,
+            timeout: TimeSpan.FromSeconds(20));
+        Assert.True(settled, "the reconciler never settled the stranded refund within 20s");
+
+        // It asked the provider about the refund...
+        Assert.True(_factory.Gateway.RefundStatusQueryCount > 0,
+            "recovery never queried the provider for refund status - it fell back to re-issuing");
+        // ...and settled from that answer without moving money a second time.
+        Assert.Equal(refundsBeforeRecovery, _factory.Gateway.DistinctRefundCount);
+    }
+
+    [Fact]
+    public async Task RefundedOrder_RecordsWhoInitiatedTheRefund()
+    {
+        // Gate 0 / G3: "who asked for this" is the first question in any dispute, and the answer
+        // used to be lost the moment a background process finished the job.
+        var (customerToken, holdId) = await ArrangeOnSaleHoldAsync();
+        var orderResponse = await PostOrderAsync(customerToken, holdId, "refund-initiator");
+        orderResponse.EnsureSuccessStatusCode();
+        var orderId = (await orderResponse.Content.ReadFromJsonAsync<OrderDto>(ApiClientExtensions.Json))!.Id;
+
+        var refund = await _client.PostAsAsync(customerToken, $"/api/v1/customer/orders/{orderId}/refund");
+        refund.EnsureSuccessStatusCode();
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        var order = await db.Orders.IgnoreQueryFilters().FirstAsync(o => o.Id == orderId);
+
+        Assert.Equal(OrderStatus.Refunded, order.Status);
+        Assert.StartsWith("customer:", order.RefundInitiatedByActor);
+    }
+
     private async Task<int> OrdersInStatusAsync(Guid orderId, OrderStatus status)
     {
         using var scope = _factory.Services.CreateScope();

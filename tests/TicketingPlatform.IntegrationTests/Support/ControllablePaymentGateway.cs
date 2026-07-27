@@ -37,6 +37,8 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
     {
         _charges.Clear();
         _refundKeys.Clear();
+        _refundStatusQueries = 0;
+        RefundStatusResponder = null;
         ChargeResponder = DefaultCharge;
         ChargeGate.Arm(0);
         RefundGate.Arm(0);
@@ -62,4 +64,24 @@ public sealed class ControllablePaymentGateway : IPaymentGateway
         Task.FromResult(_charges.TryGetValue(idempotencyKey, out var chargeId)
             ? PaymentInquiry.Charged(chargeId)
             : PaymentInquiry.NotCharged());
+
+    /// <summary>
+    /// The refund-side mirror. <see cref="_refundKeys"/> is the provider's memory of which refund
+    /// keys it has seen, so a stranded refund can be settled from provider truth instead of being
+    /// re-issued. Override to script Pending/Unknown recovery scenarios.
+    /// </summary>
+    public Func<string, RefundInquiry>? RefundStatusResponder { get; set; }
+
+    /// <summary>How many times recovery asked the provider about a refund - proves G1's path runs.</summary>
+    public int RefundStatusQueryCount => _refundStatusQueries;
+    private int _refundStatusQueries;
+
+    public Task<RefundInquiry> GetRefundStatusAsync(string refundIdempotencyKey, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _refundStatusQueries);
+        return Task.FromResult(RefundStatusResponder?.Invoke(refundIdempotencyKey)
+            ?? (_refundKeys.ContainsKey(refundIdempotencyKey)
+                ? RefundInquiry.Refunded($"rf_{refundIdempotencyKey}")
+                : RefundInquiry.NotRefunded()));
+    }
 }
