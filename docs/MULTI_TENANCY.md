@@ -158,7 +158,7 @@ That is not a bug today. It is the shape from which tenancy bugs emerge later, b
 property is maintained by care rather than by construction, and care does not survive a codebase
 growing a venue model, an allocation model, and thirty new query methods.
 
-### 2.2 The fix: make the two planes explicit
+### 2.2 The fix: make the two planes explicit — **implemented (Track 3 / T1)**
 
 Rather than one filter with escape hatches, model both planes as first-class access contexts:
 
@@ -176,6 +176,39 @@ The payoff is that "which scope is this?" becomes a code-review question with fo
 answers and a compile-time home, instead of an invisible property of whether someone remembered a
 `Where` clause. This is Track 3 / T1 in the roadmap, and it is worth doing *before* Phase A doubles
 the number of tenant-scoped tables.
+
+#### What shipped, and what the implementation changed about the plan
+
+`Infrastructure/Persistence/Scopes/AccessScopes.cs` is now the only file in the solution that calls
+`IgnoreQueryFilters`, enforced by an architecture test (verified to fail on a real violation). All
+33 bypass call sites moved onto it. Four corrections to the sketch above, found while doing it:
+
+1. **There are five scopes, not four.** `OpsSnapshotService` reads cross-tenant over HTTP as an
+   authenticated **PlatformAdmin** — privileged, but with a real principal, so access is
+   attributable. That is a different authorization story from a background worker, so it got its
+   own `PlatformScope` rather than being folded into `SystemScope`.
+2. **The customer plane escalates into the tenant plane.** The customer controllers call
+   `ITenantContext.SetTenant` with a tenant they discover from the resource being touched
+   (`GetHoldTenantIdAsync`, `GetTicketTypeSaleContextAsync`). So §2.1's "tenant comes from the
+   token" is true for staff but not the whole story: for customers, tenant authority is *derived
+   server-side from a client-supplied resource id*. Safe — the value is never taken from the client
+   and ownership is still checked separately — but it is a second path to tenant authority and it
+   is why those lookups exist. They are now named `SystemScope.TenantDiscovery`, and they may only
+   project a tenant id, never an entity.
+3. **Three methods serve all three planes.** Checkout finalize, refund, and the idempotency lookup
+   are entered from customer, organizer, *and* the reconciler. Because of (2) a tenant is already
+   established on the first two, so their filter bypass exists **solely for the reconciler**. They
+   are named `SystemScope.AuthorizedWriteCore` — the name is the reminder that authorization
+   happened upstream.
+4. **One genuine finding, deliberately not fixed.** `GetImagePathAsync` has no `OnSale` predicate,
+   so the image path of a *draft* event is reachable by id — every other public read restricts to
+   published. Fixing it is a behaviour change, so T1 (a zero-behaviour-change refactor) preserved
+   it behind the deliberately uncomfortable name `PublicScope.EventsIncludingUnpublished`. Worth a
+   follow-up decision.
+
+`TenantScope` also now **fails closed**: previously a missing tenant made the filter compare
+`TenantId == null`, match nothing, and return an empty result indistinguishable from "no data" —
+the worst kind of isolation failure because it is silent.
 
 ---
 
