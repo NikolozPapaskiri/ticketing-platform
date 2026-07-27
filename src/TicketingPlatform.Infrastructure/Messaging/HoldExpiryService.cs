@@ -7,6 +7,7 @@ using TicketingPlatform.Application.Common;
 using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
@@ -63,11 +64,11 @@ public sealed class HoldExpiryService : BackgroundService
     {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        var system = scope.ServiceProvider.GetRequiredService<SystemScope>();
         var outbox = scope.ServiceProvider.GetRequiredService<IOutbox>();
         var now = _clock.GetUtcNow();
 
-        var expired = await db.Holds
-            .IgnoreQueryFilters() // background scope has no tenant - see class docs
+        var expired = await system.Of<Hold>() // background scope has no tenant - see class docs
             .Include(h => h.TicketType).ThenInclude(tt => tt.Inventory)
             .Where(h => h.Status == HoldStatus.Active && h.ExpiresAt <= now)
             .OrderBy(h => h.ExpiresAt)

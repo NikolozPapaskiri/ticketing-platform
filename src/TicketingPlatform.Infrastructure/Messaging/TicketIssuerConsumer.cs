@@ -11,6 +11,7 @@ using TicketingPlatform.Application.Contracts;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
@@ -99,6 +100,7 @@ public sealed class TicketIssuerConsumer : BackgroundService
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        var system = scope.ServiceProvider.GetRequiredService<SystemScope>();
 
         const string consumerName = nameof(TicketIssuerConsumer);
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
@@ -107,16 +109,15 @@ public sealed class TicketIssuerConsumer : BackgroundService
         var message = IntegrationEventEnvelopeCodec.ReadPayload<OrderConfirmedIntegrationEvent>(envelope);
         var orderId = message.OrderId;
 
-        if (await db.Tickets.IgnoreQueryFilters().AnyAsync(t => t.OrderId == orderId, ct))
+        if (await system.Of<Ticket>().AnyAsync(t => t.OrderId == orderId, ct))
         {
             db.ProcessedMessages.Add(new ProcessedMessage { MessageId = messageId, Consumer = consumerName, ProcessedAt = DateTimeOffset.UtcNow });
             await db.SaveChangesAsync(ct);
             return;
         }
 
-        // Re-read the full graph from the source of truth (background scope: IgnoreQueryFilters).
-        var order = await db.Orders
-            .IgnoreQueryFilters()
+        // Re-read the full graph from the source of truth (background scope: no tenant).
+        var order = await system.Of<Order>()
             .Include(o => o.Hold).ThenInclude(h => h.TicketType).ThenInclude(tt => tt.Event)
             .AsNoTracking()
             .FirstOrDefaultAsync(o => o.Id == orderId, ct);

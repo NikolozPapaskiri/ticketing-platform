@@ -4,7 +4,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TicketingPlatform.Application.Common;
 using TicketingPlatform.Domain;
+using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
 
@@ -61,25 +63,25 @@ public sealed class RetentionService : BackgroundService
     public async Task<RetentionResult> SweepAsync(CancellationToken ct)
     {
         using var scope = _scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        var system = scope.ServiceProvider.GetRequiredService<SystemScope>();
         var now = _clock.GetUtcNow();
 
-        var outbox = await db.OutboxMessages.IgnoreQueryFilters()
+        var outbox = await system.Of<OutboxMessage>()
             .Where(o => o.ProcessedAt != null && o.ProcessedAt < now.AddDays(-_options.ProcessedOutboxRetentionDays))
             .ExecuteDeleteAsync(ct);
 
-        var dedupe = await db.ProcessedMessages.IgnoreQueryFilters()
+        var dedupe = await system.Of<ProcessedMessage>()
             .Where(p => p.ProcessedAt < now.AddDays(-_options.DedupeRetentionDays))
             .ExecuteDeleteAsync(ct);
 
-        var idempotency = await db.IdempotencyRecords.IgnoreQueryFilters()
+        var idempotency = await system.Of<IdempotencyRecord>()
             .Where(i => i.Status == IdempotencyRecordStatus.Completed
                         && i.CompletedAt != null
                         && i.CompletedAt < now.AddDays(-_options.CompletedIdempotencyRetentionDays))
             .ExecuteDeleteAsync(ct);
 
         var tokenCutoff = now.AddDays(-_options.DeadRefreshTokenRetentionDays);
-        var tokens = await db.RefreshTokens.IgnoreQueryFilters()
+        var tokens = await system.Of<RefreshToken>()
             .Where(t => t.ExpiresAt < tokenCutoff || (t.RevokedAt != null && t.RevokedAt < tokenCutoff))
             .ExecuteDeleteAsync(ct);
 

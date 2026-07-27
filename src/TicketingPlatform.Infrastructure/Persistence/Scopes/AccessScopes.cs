@@ -145,4 +145,17 @@ public sealed class SystemScope
     /// Callers must have authorized the caller already. This name is the reminder.
     /// </summary>
     public IQueryable<T> AuthorizedWriteCore<T>() where T : class => _db.Set<T>().IgnoreQueryFilters();
+
+    /// <summary>
+    /// Scope BOOTSTRAP: the chicken-and-egg lookups. A customer request cannot open a tenant scope
+    /// until it knows which tenant the resource it is touching belongs to, so this resolves that -
+    /// and nothing else. Queries here must project a tenant id (or a tiny sale-context DTO), never
+    /// return entities, because the caller has not been authorized for the tenant yet.
+    ///
+    /// Note this is a SECOND path to tenant authority besides the token claim: the customer
+    /// controllers call ITenantContext.SetTenant with what they find here. It is safe because the
+    /// value is derived server-side from the resource, not accepted from the client - but it is the
+    /// reason ownership must still be checked separately.
+    /// </summary>
+    public IQueryable<T> TenantDiscovery<T>() where T : class => _db.Set<T>().IgnoreQueryFilters();
 }

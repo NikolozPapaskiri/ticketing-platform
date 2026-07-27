@@ -7,8 +7,10 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Application.Contracts;
+using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Outbox;
 using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 using TicketingPlatform.Infrastructure.ReadModels;
 
 namespace TicketingPlatform.Infrastructure.Messaging;
@@ -101,6 +103,7 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        var system = scope.ServiceProvider.GetRequiredService<SystemScope>();
 
         const string consumerName = nameof(AvailabilityProjectionConsumer);
         if (await db.ProcessedMessages.AnyAsync(m => m.MessageId == messageId && m.Consumer == consumerName, ct))
@@ -109,9 +112,8 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         var message = IntegrationEventEnvelopeCodec.ReadPayload<AvailabilityChangedIntegrationEvent>(envelope);
         var ticketTypeId = message.TicketTypeId;
 
-        // Re-read the LIVE truth (background scope has no tenant -> IgnoreQueryFilters).
-        var truth = await db.TicketTypes
-            .IgnoreQueryFilters()
+        // Re-read the LIVE truth (background scope has no tenant).
+        var truth = await system.Of<TicketType>()
             .Include(tt => tt.Inventory)
             .Include(tt => tt.Event)
             .AsNoTracking()
@@ -119,7 +121,7 @@ public sealed class AvailabilityProjectionConsumer : BackgroundService
         if (truth is null)
             return; // ticket type deleted between event and projection - nothing to project
 
-        var view = await db.EventAvailability.IgnoreQueryFilters()
+        var view = await system.Of<EventAvailabilityView>()
             .FirstOrDefaultAsync(v => v.TicketTypeId == ticketTypeId, ct);
         if (view is null)
         {

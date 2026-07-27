@@ -7,6 +7,7 @@ using TicketingPlatform.Application.Common;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Messaging;
 using TicketingPlatform.Infrastructure.Persistence;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 
 namespace TicketingPlatform.Api.Features.Ops;
 
@@ -19,6 +20,7 @@ namespace TicketingPlatform.Api.Features.Ops;
 public sealed class OpsSnapshotService
 {
     private readonly TicketingDbContext _db;
+    private readonly PlatformScope _platform;
     private readonly IWaitingRoom _waitingRoom;
     private readonly HealthCheckService _health;
     private readonly RabbitMqOptions _rabbit;
@@ -27,6 +29,7 @@ public sealed class OpsSnapshotService
 
     public OpsSnapshotService(
         TicketingDbContext db,
+        PlatformScope platform,
         IWaitingRoom waitingRoom,
         HealthCheckService health,
         IOptions<RabbitMqOptions> rabbit,
@@ -34,6 +37,7 @@ public sealed class OpsSnapshotService
         IConfiguration configuration)
     {
         _db = db;
+        _platform = platform;
         _waitingRoom = waitingRoom;
         _health = health;
         _rabbit = rabbit.Value;
@@ -52,18 +56,18 @@ public sealed class OpsSnapshotService
             .ToList();
 
         // Cross-tenant (the ops view is platform-wide, so ignore the tenant filter).
-        var ordersByStatus = (await _db.Orders.IgnoreQueryFilters()
+        var ordersByStatus = (await _platform.Of<Order>()
                 .GroupBy(o => o.Status)
                 .Select(g => new { Status = g.Key, Count = g.LongCount() })
                 .ToListAsync(ct))
             .ToDictionary(x => x.Status.ToString(), x => x.Count);
 
-        var paymentsAwaiting = await _db.Orders.IgnoreQueryFilters()
+        var paymentsAwaiting = await _platform.Of<Order>()
             .CountAsync(o => o.Status == OrderStatus.PendingPayment
                              && o.Hold.PaymentLeaseUntil != null
                              && o.Hold.PaymentLeaseUntil <= now, ct);
 
-        var refundsPending = await _db.Orders.IgnoreQueryFilters()
+        var refundsPending = await _platform.Of<Order>()
             .CountAsync(o => o.Status == OrderStatus.RefundPending, ct);
 
         var outboxPending = await _db.OutboxMessages
