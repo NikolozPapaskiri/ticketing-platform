@@ -217,9 +217,9 @@ included 6 doc comments): 13 System, 7 Public, 6 Customer, 3 Platform, plus 3 na
 `AuthorizedWriteCore` and 3 named `TenantDiscovery` for the sites that genuinely serve more than
 one plane. `TenantScope` now fails closed. Ownership for customer reads — including the
 transitive Order→Ticket join — is expressed once instead of per method. Zero behaviour change, no
-migration; 214 tests green (83 unit + 131 integration) with no assertion edited. See
-MULTI_TENANCY.md §2.2 for the four things implementation changed about the plan, including the
-image-path finding left deliberately unfixed.
+migration; 214 tests green (83 unit + 131 integration) with no assertion edited. Public reads also
+stopped returning entities - they project to rows in SQL. See MULTI_TENANCY.md §2.2 for the four
+things implementation changed about the plan.
 
 *Original description:*
 Isolation today is one global query filter on nine entity types, defeated with
