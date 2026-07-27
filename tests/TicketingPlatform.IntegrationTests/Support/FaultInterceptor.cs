@@ -30,6 +30,14 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
     /// <summary>Blocks the save that flips a hold to Released (concurrent-release coordination).</summary>
     public AsyncGate HoldReleaseGate { get; } = new();
 
+    /// <summary>
+    /// Blocks the save that pushes out a PaymentPending hold's lease. That is the ambiguous-payment
+    /// path (provider unreachable), where a client retry and the background reconciler can both be
+    /// extending the same lease - holding it here lets a test bump the row underneath and force the
+    /// concurrency conflict deterministically instead of hoping for it.
+    /// </summary>
+    public AsyncGate PaymentLeaseExtendGate { get; } = new();
+
     public sealed class SimulatedCrashException : Exception
     {
         public SimulatedCrashException()
@@ -43,6 +51,7 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
         IdempotencyClaimGate.Arm(0);
         TicketScanGate.Arm(0);
         HoldReleaseGate.Arm(0);
+        PaymentLeaseExtendGate.Arm(0);
     }
 
     public override InterceptionResult<int> SavingChanges(
@@ -62,12 +71,27 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
             await TicketScanGate.PassAsync(ct);
         if (IsReleasingHold(eventData.Context))
             await HoldReleaseGate.PassAsync(ct);
+        if (IsExtendingPaymentLease(eventData.Context))
+            await PaymentLeaseExtendGate.PassAsync(ct);
         return await base.SavingChangesAsync(eventData, result, ct);
     }
 
     private static bool IsScanningTicket(DbContext? context) =>
         context is not null && context.ChangeTracker.Entries<Ticket>()
             .Any(e => e.State == EntityState.Modified && e.Entity.Status == TicketStatus.Scanned);
+
+    /// <summary>
+    /// An EXTENSION, not the initial claim. Both saves leave the hold PaymentPending with a modified
+    /// lease - the claim (Active -> PaymentPending) also writes Status, an extension does not. Without
+    /// that distinction this gate catches the claim instead, and the test ends up exercising the
+    /// "hold no longer available" 409 path rather than the ambiguous-payment one.
+    /// </summary>
+    private static bool IsExtendingPaymentLease(DbContext? context) =>
+        context is not null && context.ChangeTracker.Entries<Hold>()
+            .Any(e => e.State == EntityState.Modified
+                      && e.Entity.Status == HoldStatus.PaymentPending
+                      && e.Property(h => h.PaymentLeaseUntil).IsModified
+                      && !e.Property(h => h.Status).IsModified);
 
     private static bool IsReleasingHold(DbContext? context) =>
         context is not null && context.ChangeTracker.Entries<Hold>()

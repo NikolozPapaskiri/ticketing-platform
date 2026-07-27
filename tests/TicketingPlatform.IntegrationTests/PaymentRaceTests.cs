@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Domain;
 using TicketingPlatform.Infrastructure.Persistence;
 
