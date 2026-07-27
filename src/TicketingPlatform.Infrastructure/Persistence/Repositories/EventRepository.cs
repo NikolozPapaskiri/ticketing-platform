@@ -1,13 +1,20 @@
 using Microsoft.EntityFrameworkCore;
 using TicketingPlatform.Application.Abstractions;
 using TicketingPlatform.Domain;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 
 namespace TicketingPlatform.Infrastructure.Persistence.Repositories;
 
 public sealed class EventRepository : IEventRepository
 {
     private readonly TicketingDbContext _db;
-    public EventRepository(TicketingDbContext db) => _db = db;
+    private readonly PublicScope _public;
+
+    public EventRepository(TicketingDbContext db, PublicScope publicScope)
+    {
+        _db = db;
+        _public = publicScope;
+    }
 
     // Composable IQueryable: the optional status Where only joins the expression tree when a
     // filter is present; the tenant query filter is always baked in. Nothing executes until
@@ -56,39 +63,40 @@ public sealed class EventRepository : IEventRepository
     public Task<Tenant?> GetTenantBySlugAsync(string slug, CancellationToken ct) =>
         _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Slug == slug, ct);
 
-    public async Task<IReadOnlyList<Event>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct) =>
-        await _db.Events
-            .IgnoreQueryFilters()
+    public async Task<IReadOnlyList<PublicEventRow>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct) =>
+        // Projected in SQL: the public plane never materialises an Event entity.
+        await _public.OnSaleEvents()
             .AsNoTracking()
-            .Where(e => e.TenantId == tenantId && e.Status == EventStatus.OnSale)
+            .Where(e => e.TenantId == tenantId)
             .OrderBy(e => e.StartsAt)
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .Select(e => new PublicEventRow(e.Id, e.Name, e.VenueName, e.StartsAt))
             .ToListAsync(ct);
 
     public Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct) =>
-        _db.Events
-            .IgnoreQueryFilters()
-            .CountAsync(e => e.TenantId == tenantId && e.Status == EventStatus.OnSale, ct);
+        _public.OnSaleEvents()
+            .CountAsync(e => e.TenantId == tenantId, ct);
 
-    public Task<Event?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct) =>
-        _db.Events
-            .IgnoreQueryFilters()
+    public Task<PublicEventDetail?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct) =>
+        _public.OnSaleEvents()
             .AsNoTracking()
-            .Include(e => e.TicketTypes)
-                .ThenInclude(tt => tt.Inventory)
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.TenantId == tenantId && e.Status == EventStatus.OnSale, ct);
+            .Where(e => e.Id == eventId && e.TenantId == tenantId)
+            .Select(e => new PublicEventDetail(
+                e.Id, e.Name, e.Description, e.VenueName, e.StartsAt, e.WaitingRoomEnabled,
+                e.TicketTypes.Select(tt => new PublicTicketTypeRow(
+                    tt.Id, tt.Name, tt.Price, tt.Currency,
+                    tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()))
+            .FirstOrDefaultAsync(ct);
 
     // --- Marketplace: the cross-tenant catalog. Composable IQueryable, filters applied only
     // when present (same deferred-execution pattern as the staff browse).
     private IQueryable<Event> MarketplaceQuery(EventCategory? category, DateTimeOffset? from,
         DateTimeOffset? to, string? query, Guid? tenantId)
     {
-        var events = _db.Events
-            .IgnoreQueryFilters() // anonymous scope has no tenant; visibility = OnSale only
-            .AsNoTracking()
-            .Where(e => e.Status == EventStatus.OnSale);
+        // Anonymous scope has no tenant; PublicScope bakes in the OnSale visibility rule.
+        var events = _public.OnSaleEvents().AsNoTracking();
 
         if (category is not null)
             events = events.Where(e => e.Category == category);
@@ -138,31 +146,28 @@ public sealed class EventRepository : IEventRepository
                     e.TicketTypes.OrderBy(tt => tt.Price).Select(tt => tt.Currency).FirstOrDefault()))
             .ToListAsync(ct);
 
-    public async Task<MarketplaceEventDetail?> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct)
-    {
-        var ev = await _db.Events
-            .IgnoreQueryFilters()
+    public Task<MarketplaceEventDetail?> GetMarketplaceEventAsync(Guid eventId, CancellationToken ct) =>
+        // One projected query instead of entity + follow-up tenant read. Tenants carry no query
+        // filter (top-level owners), so the join works anonymously.
+        _public.OnSaleEvents()
             .AsNoTracking()
-            .Include(e => e.TicketTypes)
-                .ThenInclude(tt => tt.Inventory)
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.Status == EventStatus.OnSale, ct);
-        if (ev is null)
-            return null;
-
-        var tenant = await _db.Tenants.AsNoTracking().FirstAsync(t => t.Id == ev.TenantId, ct);
-        return new MarketplaceEventDetail(ev, tenant.Name, tenant.Slug);
-    }
+            .Where(e => e.Id == eventId)
+            .Join(_db.Tenants, e => e.TenantId, t => t.Id, (e, t) => new MarketplaceEventDetail(
+                e.Id, e.Name, e.Description, e.VenueName, e.StartsAt, e.Category,
+                t.Name, t.Slug, e.ImagePath != null, e.WaitingRoomEnabled,
+                e.TicketTypes.Select(tt => new PublicTicketTypeRow(
+                    tt.Id, tt.Name, tt.Price, tt.Currency,
+                    tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()))
+            .FirstOrDefaultAsync(ct);
 
     public async Task<string?> GetImagePathAsync(Guid eventId, CancellationToken ct) =>
-        await _db.Events
-            .IgnoreQueryFilters()
+        await _public.EventsIncludingUnpublished()
             .Where(e => e.Id == eventId)
             .Select(e => e.ImagePath)
             .FirstOrDefaultAsync(ct);
 
     public Task<EventWaitingRoomState?> GetWaitingRoomStateAsync(Guid eventId, CancellationToken ct) =>
-        _db.Events
-            .IgnoreQueryFilters() // anonymous queue endpoints: no tenant on the request
+        _public.EventsIncludingUnpublished() // anonymous queue endpoints: no tenant on the request
             .AsNoTracking()
             .Where(e => e.Id == eventId)
             .Select(e => new EventWaitingRoomState(e.Status == EventStatus.OnSale, e.WaitingRoomEnabled))

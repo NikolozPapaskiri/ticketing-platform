@@ -26,13 +26,15 @@ public interface IEventRepository
     Task SaveChangesAsync(CancellationToken ct);
 
     Task<Tenant?> GetTenantBySlugAsync(string slug, CancellationToken ct);
-    Task<IReadOnlyList<Event>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct);
+    Task<IReadOnlyList<PublicEventRow>> ListPublicOnSaleAsync(Guid tenantId, int page, int pageSize, CancellationToken ct);
     Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct);
-    Task<Event?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct);
+    Task<PublicEventDetail?> GetPublicOnSaleWithGraphAsync(Guid tenantId, Guid eventId, CancellationToken ct);
 
-    // --- Marketplace: the CROSS-TENANT public catalog. Implementations must IgnoreQueryFilters
-    // (an anonymous request has no tenant, so the filter would return nothing) and expose only
-    // OnSale events. TenantId narrows to one organizer when the storefront filters by slug.
+    // --- Marketplace: the CROSS-TENANT public catalog. Implementations read through PublicScope
+    // (an anonymous request has no tenant, so the filter would return nothing), which bakes in the
+    // OnSale visibility rule. TenantId narrows to one organizer when the storefront filters by slug.
+    // Everything here returns PROJECTED rows: a public read must never hand back an entity that
+    // could carry private fields.
     Task<int> CountMarketplaceAsync(EventCategory? category, DateTimeOffset? from, DateTimeOffset? to,
         string? query, Guid? tenantId, CancellationToken ct);
     Task<IReadOnlyList<MarketplaceEventRow>> ListMarketplaceAsync(EventCategory? category, DateTimeOffset? from,
@@ -66,4 +68,35 @@ public sealed record MarketplaceEventRow(
     decimal? PriceFrom,
     string? Currency);
 
-public sealed record MarketplaceEventDetail(Event Event, string TenantName, string TenantSlug);
+/// <summary>Projected rows for the public planes - deliberately NOT entities (Track 3 / T1).</summary>
+public sealed record PublicEventRow(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt);
+
+public sealed record PublicTicketTypeRow(
+    Guid Id,
+    string Name,
+    decimal Price,
+    string Currency,
+    int TotalQuantity,
+    int AvailableQuantity);
+
+public sealed record PublicEventDetail(
+    Guid Id,
+    string Name,
+    string? Description,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    bool WaitingRoomEnabled,
+    IReadOnlyList<PublicTicketTypeRow> TicketTypes);
+
+public sealed record MarketplaceEventDetail(
+    Guid Id,
+    string Name,
+    string? Description,
+    string? VenueName,
+    DateTimeOffset StartsAt,
+    EventCategory Category,
+    string TenantName,
+    string TenantSlug,
+    bool HasImage,
+    bool WaitingRoomEnabled,
+    IReadOnlyList<PublicTicketTypeRow> TicketTypes);

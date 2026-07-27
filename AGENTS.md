@@ -582,8 +582,35 @@ This block supersedes older phase-progress lines above if they disagree.
   `docker-compose.observability.yml` overlays an OTel Collector -> Prometheus/Loki/Tempo -> Grafana
   stack (+ postgres/redis/RabbitMQ/MinIO exporters, provisioned overview dashboard). An in-app
   PlatformAdmin ops page (`/admin/ops` + `GET /api/v1/admin/ops`) shows a source-of-truth snapshot.
-  Outstanding: P5 (alert rules + k8s monitoring overlay + more dashboards) and an end-to-end runtime
-  check that data reaches Grafana (configs are binary-validated but the full stack wasn't run).
+  P1-P5 are DONE and verified against a live stack: alert rules + Alertmanager, 5 dashboards, a
+  `k8s/monitoring/` overlay, all 6 Prometheus targets up, Loki streams carrying TraceId/SpanId, and
+  Tempo holding traces. Metric names were corrected to the collector's OTel-conventional forms and a
+  second `rabbitmq-detailed` scrape job was added for per-queue depth.
+
+## Next plans - 2026-07-27
+
+- `docs/ROADMAP.md` is the single source for what is next; it supersedes the roadmap sections of
+  `docs/TICKETING_PLATFORM_PRODUCT_RESEARCH.md`, which predates PRs 3-6 and is stale on several
+  items. Claims were re-verified against the source rather than the status blocks. Tracks: 1 = Gate
+  0 safety close-out (5 verified-open items, about one PR), 2 = product Phases A-F with
+  venue/performance/reserved seating first, 3 = multi-tenancy maturity, 4 = platform/ops leftovers,
+  plus an explicit "what not to build".
+- `docs/MULTI_TENANCY.md` is the general-solution write-up for ticketing as a service: the four
+  problems the class is made of, the canonical Venue/Hall/SeatMap + Event/Performance/PriceZone/
+  Allocation model, the six invariants, and the tenancy deep-dive. Central claim: ticketing is
+  B2B2C, so there are two tenancy planes (organizer = one tenant, fails closed on tenant mismatch;
+  customer = no tenant, fails closed on ownership), which is why roughly a third of read paths
+  legitimately need IgnoreQueryFilters. Also: isolation-strategy trigger conditions, the
+  noisy-neighbour problem with scheduled spikes and cells, the money model as a tenancy decision,
+  per-tenant settings, and tenant lifecycle.
+- Verified still-open Gate 0 items: no `IPaymentGateway.GetRefundStatusAsync`;
+  `OrderService.FinalizeAsync:154` extends the payment lease with plain `SaveChangesAsync` while the
+  confirmed path at `:168` correctly uses `TrySaveChangesAsync`; `Order` has no refund-initiator
+  field; `Order.RevertRefundClaim()` leaves `RefundClaimedAt` set; the payment/refund reconcilers
+  lack the `FOR UPDATE SKIP LOCKED` claim the outbox dispatcher already uses.
+- Already closed despite older docs saying otherwise: bounded outbox retries + quarantine
+  (`AddOutboxRetrySchedule`), versioned envelopes (`AddIntegrationEventEnvelopeMetadata`), broker
+  failure-window tests, observability P5, and the distributed login limiter.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.

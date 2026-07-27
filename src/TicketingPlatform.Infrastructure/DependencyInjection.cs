@@ -14,6 +14,7 @@ using TicketingPlatform.Infrastructure.Payments;
 using TicketingPlatform.Infrastructure.Storage;
 using TicketingPlatform.Infrastructure.Persistence;
 using TicketingPlatform.Infrastructure.Persistence.Repositories;
+using TicketingPlatform.Infrastructure.Persistence.Scopes;
 using TicketingPlatform.Infrastructure.Reservations;
 using TicketingPlatform.Infrastructure.Security;
 using TicketingPlatform.Infrastructure.WaitingRoom;
@@ -79,6 +80,14 @@ public static class DependencyInjection
         AddFileStorage(services, configuration);
         if (runsWorkers)
             services.AddHostedService<TicketIssuerConsumer>();
+
+        // Tenancy access scopes (docs/MULTI_TENANCY.md §2.2): the five planes a query can be in.
+        // Scoped, because they wrap the scoped DbContext.
+        services.AddScoped<TenantScope>();
+        services.AddScoped<CustomerScope>();
+        services.AddScoped<PublicScope>();
+        services.AddScoped<PlatformScope>();
+        services.AddScoped<SystemScope>();
 
         // Security: PBKDF2 hashing + JWT creation. Singletons - both are stateless.
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));

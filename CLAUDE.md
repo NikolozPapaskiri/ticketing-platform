@@ -616,8 +616,35 @@ This block supersedes older phase-progress lines above if they disagree.
   plus postgres/redis/RabbitMQ/MinIO exporters. In-app **`/admin/ops`** page + `GET /api/v1/admin/ops`
   (PlatformAdmin) render a source-of-truth snapshot (health + backlogs), accurate in any topology
   since it doesn't read the worker-populated gauges. 200 tests (78 unit + 122 integration).
-  Outstanding: P5 (alert rules + k8s monitoring overlay + more dashboards) + an end-to-end runtime
-  check that data reaches Grafana (stack configs are binary-validated but the full stack wasn't run).
+  **P1-P5 are DONE and verified against a live stack** (alert rules + Alertmanager, 5 dashboards,
+  `k8s/monitoring/` overlay, all 6 Prometheus targets up, Loki streams carry TraceId/SpanId, Tempo
+  holds traces). Metric names had to be corrected to the collector's OTel-conventional forms, and a
+  second `rabbitmq-detailed` scrape job was needed for per-queue depth.
+
+## Next plans — 2026-07-27
+
+- **`docs/ROADMAP.md`** is now the single source for what is next. It supersedes the roadmap
+  sections of `docs/TICKETING_PLATFORM_PRODUCT_RESEARCH.md` (written before PRs 3-6 landed and
+  stale on several items). It was written by re-verifying claims against the source, not the status
+  blocks. Structure: Track 1 = Gate 0 safety close-out (5 verified-open items, ~1 PR), Track 2 =
+  product Phases A-F (venue/performance/reserved seating first), Track 3 = multi-tenancy maturity,
+  Track 4 = platform/ops leftovers, plus a "what not to build" section.
+- **`docs/MULTI_TENANCY.md`** is the general-solution write-up for this class of product: the four
+  problems every ticketing platform is made of, the canonical `Venue/Hall/SeatMap` +
+  `Event/Performance/PriceZone/Allocation` model, the six invariants, and a multi-tenancy deep-dive.
+  Its central claim: ticketing is B2B2C, so it has **two tenancy planes** (organizer = one tenant,
+  fails closed on tenant mismatch; customer = no tenant, fails closed on ownership), which is why
+  ~a third of read paths legitimately need `IgnoreQueryFilters`. Also covers isolation-strategy
+  trigger conditions, the ticketing-specific noisy-neighbour problem (scheduled spikes, cells), the
+  money model as a tenancy decision, per-tenant settings, and tenant lifecycle.
+- **Verified still-open Gate 0 items** (checked in code, not assumed): no
+  `IPaymentGateway.GetRefundStatusAsync`; `OrderService.FinalizeAsync:154` extends the payment lease
+  with plain `SaveChangesAsync` (the confirmed path at `:168` correctly uses `TrySaveChangesAsync`);
+  `Order` has no refund-initiator field; `Order.RevertRefundClaim()` leaves `RefundClaimedAt` set;
+  the payment/refund reconcilers lack the `FOR UPDATE SKIP LOCKED` claim the outbox dispatcher has.
+- **Already closed despite older docs saying otherwise:** bounded outbox retries + quarantine
+  (`AddOutboxRetrySchedule`), versioned envelopes (`AddIntegrationEventEnvelopeMetadata`), broker
+  failure-window tests, observability P5, distributed login limiter.
 
 When you finish a phase or product milestone, move its items into "Done" and update this latest
 status block.
