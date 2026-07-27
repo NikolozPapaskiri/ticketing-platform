@@ -57,10 +57,24 @@ nullable column). 219 tests green (86 unit + 133 integration).
 
 **Not built, deliberately:** G5 — per its own instruction below.
 
-**Still outstanding:** the G2 deterministic retry-versus-reconciler race test. The code change is in
-and the suite is green, but pinning the conflict branch needs a new lease-extension gate in
-`FaultInterceptor` (the existing gates cover idempotency claim, ticket scan, and hold release). By
-the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until that exists.
+**Still outstanding: the G2 deterministic race test.** The code change is in and the suite is green,
+but the test that pins the conflict branch does not exist yet. An attempt was made and **discarded
+because it was vacuous** — it passed with the G2 fix reverted, so it proved nothing. Two things were
+learned and are worth not re-discovering:
+
+1. `FaultInterceptor.PaymentLeaseExtendGate` now exists as the seam, and the detector has to
+   distinguish an **extension** from the initial **claim**: both leave the hold `PaymentPending` with
+   a modified lease, but the claim also writes `Status`. Gating on the claim by mistake makes the test
+   exercise the "hold no longer available" 409 path instead of the ambiguous-payment one.
+2. Bumping the hold row underneath the frozen save with `ExecuteUpdateAsync` (which bypasses the
+   change tracker, so it does not trip the gate) did **not** produce the expected
+   `DbUpdateConcurrencyException`. Why is unresolved — candidates: the lease value being written is
+   unchanged so EF emits no `UPDATE` for the hold at all (this factory uses a 600s lease, so two
+   `GetUtcNow()` calls milliseconds apart may not differ enough to matter), or the arrival observed at
+   the gate came from a different DbContext than the request's. Start by asserting the client's save
+   actually conflicts before asserting the HTTP status.
+
+By the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until this exists.
 
 ### G1. Refund-status inquiry — *P1*
 Add `GetRefundStatusAsync(refundIdempotencyKey)` returning `Refunded(providerRefundId) |
