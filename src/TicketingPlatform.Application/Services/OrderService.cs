@@ -151,7 +151,19 @@ public sealed class OrderService
             // the lease out; reconciliation (or the client's retry) settles it. Nothing is lost.
             if (order.Hold.Status == HoldStatus.PaymentPending)
                 order.Hold.ExtendPaymentLease(now + _holdOptions.PaymentLease);
-            await _orders.SaveChangesAsync(ct);
+
+            // The client's retry and the background reconciler can both be extending this same
+            // lease. A plain save would throw DbUpdateConcurrencyException here - a 500 on the one
+            // path whose entire purpose is to degrade gracefully. Lose the race politely instead:
+            // whoever won has already settled or re-leased the order, so report their outcome.
+            if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
+            {
+                var settled = await _orders.GetOrderWithHoldForUpdateAsync(orderId, ct);
+                return settled is null
+                    ? Result<OrderResponse>.NotFound($"Order '{orderId}' was not found.")
+                    : ResultForResolvedOrder(settled);
+            }
+
             TicketingMetrics.OrdersPaymentUnavailable.Add(1);
             return Result<OrderResponse>.Success(Map(order)); // PendingPayment -> 202 Accepted
         }
@@ -321,7 +333,7 @@ public sealed class OrderService
         // Atomically claim Confirmed -> RefundPending BEFORE the provider call. The order's
         // concurrency token means only one caller wins the claim; the loser resolves to this
         // same order and re-attempts the provider with the SAME stable key (idempotent).
-        order.MarkRefundPending(now);
+        order.MarkRefundPending(now, actorKey);
         if (await _orders.TrySaveChangesAsync(ct) == SaveOutcome.ConcurrencyConflict)
         {
             var current = await _orders.GetForRefundAsync(orderId, ct);
@@ -349,8 +361,33 @@ public sealed class OrderService
         var order = await _orders.GetOrderWithHoldForUpdateAsync(orderId, ct);
         if (order is null || order.Status != OrderStatus.RefundPending)
             return; // already settled by the client's retry or another replica
-        await SettleRefundAsync(order, order.TenantId, "reconciler", _clock.GetUtcNow(), ct);
+
+        // ASK the provider first - it is the authority on whether money moved, not our database.
+        // Re-issuing the refund and trusting the stable key to dedupe is an assumption about the
+        // provider's idempotency-record retention; asking is a guarantee.
+        var inquiry = await _payments.GetRefundStatusAsync(RefundKey(order), ct);
+        switch (inquiry.Outcome)
+        {
+            case RefundOutcome.Refunded:
+                // Completed, response lost. Settle from provider truth without moving money again.
+                await CompleteRefundAsync(order, inquiry.ProviderRefundId!, order.TenantId, "reconciler",
+                    _clock.GetUtcNow(), ct);
+                return;
+
+            case RefundOutcome.Pending:
+                return; // still processing - leave RefundPending, the next scan settles it
+
+            // NotRefunded: no refund exists, so the claim still has work to do.
+            // Unknown: no usable answer (provider unreachable, or it exposes no status endpoint) -
+            // fall back to the keyed retry, which is exactly the pre-inquiry behaviour.
+            default:
+                await SettleRefundAsync(order, order.TenantId, "reconciler", _clock.GetUtcNow(), ct);
+                return;
+        }
     }
+
+    /// <summary>The stable per-order refund key. One logical refund, one key, for its whole life.</summary>
+    private static string RefundKey(Order order) => $"refund:{order.Id:N}";
 
     /// <summary>
     /// Call the provider with the STABLE per-order refund key and settle the RefundPending order.
@@ -361,7 +398,7 @@ public sealed class OrderService
         Order order, Guid tenantId, string actorKey, DateTimeOffset now, CancellationToken ct)
     {
         var refund = await _payments.RefundAsync(
-            new PaymentRefund($"refund:{order.Id:N}", order.ProviderChargeId!, order.Amount, order.Currency), ct);
+            new PaymentRefund(RefundKey(order), order.ProviderChargeId!, order.Amount, order.Currency), ct);
 
         if (refund.Failure == PaymentFailure.ProviderUnavailable)
         {
@@ -377,7 +414,19 @@ public sealed class OrderService
             return Result<OrderResponse>.Conflict("Refund was declined.");
         }
 
-        order.MarkRefunded(refund.ProviderChargeId!, now);
+        return await CompleteRefundAsync(order, refund.ProviderChargeId!, tenantId, actorKey, now, ct);
+    }
+
+    /// <summary>
+    /// The settle half of a refund, once the provider has confirmed the money moved - whether that
+    /// confirmation came from our own RefundAsync call or from asking the provider afterwards.
+    /// Marks the order refunded, voids the credential, credits the seat back exactly once, and
+    /// publishes the audit + availability events, all guarded by the concurrency token.
+    /// </summary>
+    private async Task<Result<OrderResponse>> CompleteRefundAsync(
+        Order order, string providerRefundId, Guid tenantId, string actorKey, DateTimeOffset now, CancellationToken ct)
+    {
+        order.MarkRefunded(providerRefundId, now);
         var ticket = await _orders.GetTicketForUpdateAsync(order.Id, ct);
         ticket?.Void(now);
         order.Hold.TicketType.Inventory.Release(order.Hold.Quantity); // credit the seat back, once
@@ -387,7 +436,9 @@ public sealed class OrderService
         _outbox.Add(new OrderRefundedIntegrationEvent(
             tenantId,
             order.Id,
-            actorKey,
+            // The PERSISTED initiator wins: when the reconciler settles a stranded refund actorKey
+            // is "reconciler", but the audit trail should name whoever asked for the money to leave.
+            order.RefundInitiatedByActor ?? actorKey,
             order.CustomerEmail,
             order.Amount,
             order.Currency));

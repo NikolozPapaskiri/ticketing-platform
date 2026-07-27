@@ -330,7 +330,21 @@ if (app.Environment.IsDevelopment())
         devCharges.TryGetValue(key, out var chargeId)
             ? Results.Ok(new { status = "charged", chargeId })
             : Results.NotFound());
-    app.MapPost("/dev-payment/refunds", () => Results.Ok(new { refundId = $"rf_{Guid.NewGuid():N}" }));
+    // Refunds mirror charges: remember the key so the refund-status lookup can answer truthfully
+    // and so refunding the same key twice returns the same id, like a real idempotent provider.
+    var devRefunds = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+    app.MapPost("/dev-payment/refunds", (HttpRequest req) =>
+    {
+        var key = req.Headers["Idempotency-Key"].FirstOrDefault();
+        var refundId = key is null
+            ? $"rf_{Guid.NewGuid():N}"
+            : devRefunds.GetOrAdd(key, _ => $"rf_{Guid.NewGuid():N}");
+        return Results.Ok(new { refundId });
+    });
+    app.MapGet("/dev-payment/refunds/{key}", (string key) =>
+        devRefunds.TryGetValue(key, out var refundId)
+            ? Results.Ok(new { status = "refunded", refundId })
+            : Results.NotFound());
 
     // Development convenience: migrate + seed the first PlatformAdmin so the closed
     // provisioning chain (only admins create staff) can start. Production migrates

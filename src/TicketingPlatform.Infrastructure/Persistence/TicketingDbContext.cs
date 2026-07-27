@@ -172,6 +172,7 @@ public class TicketingDbContext : DbContext
             b.Property(o => o.Status).HasConversion<string>().HasMaxLength(20);
             b.Property(o => o.ProviderChargeId).HasMaxLength(100);
             b.Property(o => o.ProviderRefundId).HasMaxLength(100);
+            b.Property(o => o.RefundInitiatedByActor).HasMaxLength(100);
             b.HasIndex(o => o.TenantId);
             b.HasIndex(o => o.CustomerUserId);
 

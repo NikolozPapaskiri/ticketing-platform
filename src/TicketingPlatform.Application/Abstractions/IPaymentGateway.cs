@@ -17,6 +17,16 @@ public interface IPaymentGateway
     /// again - the provider, not our database, is the authority on whether money moved.
     /// </summary>
     Task<PaymentInquiry> GetChargeStatusAsync(string idempotencyKey, CancellationToken ct);
+
+    /// <summary>
+    /// The same reconciliation lookup for money going the OTHER way. Without it, recovering a
+    /// stranded refund means re-calling <see cref="RefundAsync"/> with the stable key and trusting
+    /// the provider to have kept its idempotency record for the whole recovery horizon - an
+    /// assumption about someone else's retention policy rather than a guarantee. It also cannot
+    /// tell "refund completed, response lost" from "refund still processing" from "no refund
+    /// exists". Asking is how both money directions settle against provider truth.
+    /// </summary>
+    Task<RefundInquiry> GetRefundStatusAsync(string refundIdempotencyKey, CancellationToken ct);
 }
 
 public sealed record PaymentCharge(string IdempotencyKey, decimal Amount, string Currency);
@@ -51,4 +61,21 @@ public sealed record PaymentInquiry(PaymentOutcome Outcome, string? ProviderChar
     public static PaymentInquiry NotCharged() => new(PaymentOutcome.NotCharged, null);
     public static PaymentInquiry Pending() => new(PaymentOutcome.Pending, null);
     public static PaymentInquiry Unknown() => new(PaymentOutcome.Unknown, null);
+}
+
+/// <summary>The refund-side mirror of <see cref="PaymentOutcome"/>.</summary>
+public enum RefundOutcome
+{
+    Refunded,     // the provider confirms a completed refund for this key
+    NotRefunded,  // the provider confirms no refund exists for this key
+    Pending,      // the provider knows the key but the refund is not final yet
+    Unknown       // unreachable / no usable answer - fall back to a keyed retry
+}
+
+public sealed record RefundInquiry(RefundOutcome Outcome, string? ProviderRefundId)
+{
+    public static RefundInquiry Refunded(string providerRefundId) => new(RefundOutcome.Refunded, providerRefundId);
+    public static RefundInquiry NotRefunded() => new(RefundOutcome.NotRefunded, null);
+    public static RefundInquiry Pending() => new(RefundOutcome.Pending, null);
+    public static RefundInquiry Unknown() => new(RefundOutcome.Unknown, null);
 }
