@@ -38,6 +38,14 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
     /// </summary>
     public AsyncGate PaymentLeaseExtendGate { get; } = new();
 
+    /// <summary>
+    /// Restricts <see cref="PaymentLeaseExtendGate"/> to ONE hold. Without this the gate fires for
+    /// whichever lease-extension save happens to reach it first - the request's, a reconciler pass,
+    /// or another test's - and a race test can then "observe an arrival" that was never the save it
+    /// is trying to freeze. Null means "any hold".
+    /// </summary>
+    public Guid? PaymentLeaseExtendHoldId { get; set; }
+
     public sealed class SimulatedCrashException : Exception
     {
         public SimulatedCrashException()
@@ -52,6 +60,7 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
         TicketScanGate.Arm(0);
         HoldReleaseGate.Arm(0);
         PaymentLeaseExtendGate.Arm(0);
+        PaymentLeaseExtendHoldId = null;
     }
 
     public override InterceptionResult<int> SavingChanges(
@@ -86,12 +95,13 @@ public sealed class FaultInterceptor : SaveChangesInterceptor
     /// that distinction this gate catches the claim instead, and the test ends up exercising the
     /// "hold no longer available" 409 path rather than the ambiguous-payment one.
     /// </summary>
-    private static bool IsExtendingPaymentLease(DbContext? context) =>
+    private bool IsExtendingPaymentLease(DbContext? context) =>
         context is not null && context.ChangeTracker.Entries<Hold>()
             .Any(e => e.State == EntityState.Modified
                       && e.Entity.Status == HoldStatus.PaymentPending
                       && e.Property(h => h.PaymentLeaseUntil).IsModified
-                      && !e.Property(h => h.Status).IsModified);
+                      && !e.Property(h => h.Status).IsModified
+                      && (PaymentLeaseExtendHoldId is null || e.Entity.Id == PaymentLeaseExtendHoldId));
 
     private static bool IsReleasingHold(DbContext? context) =>
         context is not null && context.ChangeTracker.Entries<Hold>()

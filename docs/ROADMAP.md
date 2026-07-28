@@ -57,10 +57,14 @@ nullable column). 219 tests green (86 unit + 133 integration).
 
 **Not built, deliberately:** G5 — per its own instruction below.
 
-**Still outstanding: the G2 deterministic race test.** The code change is in and the suite is green,
-but the test that pins the conflict branch does not exist yet. An attempt was made and **discarded
-because it was vacuous** — it passed with the G2 fix reverted, so it proved nothing. Two things were
-learned and are worth not re-discovering:
+**G2's race test now exists and is proven** —
+`PaymentRaceTests.AmbiguousPayment_LosingTheLeaseRace_Returns202_NotServerError`. It freezes the
+request's own lease-extension save, has a competitor move the row with `ExecuteUpdateAsync`, releases,
+and asserts 202. Verified to FAIL on the pre-G2 code (`Expected: Accepted / Actual:
+InternalServerError`), so it pins the defect rather than merely passing. **Gate 0 is now closed for
+G1–G4** (G5 remains deliberately unbuilt).
+
+Getting there took two discarded attempts, and the reasons are worth not re-discovering:
 
 1. `FaultInterceptor.PaymentLeaseExtendGate` now exists as the seam, and the detector has to
    distinguish an **extension** from the initial **claim**: both leave the hold `PaymentPending` with
@@ -74,10 +78,17 @@ learned and are worth not re-discovering:
    actually changed, because writing the value the row already holds produces no `UPDATE` and
    therefore no conflict, which is the trap to avoid when building the HTTP-level version.
 
-   What remains unexplained is why the HTTP attempt saw a gate arrival yet its save did not conflict.
-   The next debugging step is to identify **which `DbContext` arrives at the gate** (log or capture the
-   instance) before asserting anything about the response — the arrival may not have been the
-   request's.
+   The unexplained part was why the HTTP attempt saw a gate arrival yet its save did not conflict.
+   The likely answer is that the gate was **not scoped to a hold**, so it fired for whichever
+   lease-extension save reached it first rather than the request's own. `PaymentLeaseExtendHoldId`
+   now restricts it to one hold, which makes an arrival provably the save under test.
+
+   That was the fix. With the gate keyed to the hold the test became meaningful, and reverting
+   `TrySaveChangesAsync` to a plain save now makes it fail with the expected 500.
+
+3. A third attempt looked like it proved the opposite ("the save never reaches the gate") but had
+   actually died on `DockerUnavailableException` — the fixture never started. When a race test fails
+   in ~2ms, read the stack before believing the symptom.
 
 By the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until this exists.
 
