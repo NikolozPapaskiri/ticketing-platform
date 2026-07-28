@@ -137,7 +137,7 @@ Ordered by value. Each phase is independently shippable and independently demo-a
 
 ### Phase A — Venue, performance, reserved seating — *the highest-value expansion*
 
-**Slice 1 of 4 DONE** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
+**Slices 1-2 of 5 DONE** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
 seat maps (`SeatMapVersion` / `Section` / `SeatRow` / `Seat`), tenant-scoped like every other
 operational entity, with seat-number-unique-per-row and version-unique-per-hall enforced in the
 database. Additive only - nothing references them yet, so current behaviour is untouched. Migration
