@@ -137,7 +137,9 @@ Ordered by value. Each phase is independently shippable and independently demo-a
 
 ### Phase A — Venue, performance, reserved seating — *the highest-value expansion*
 
-**Slices 1-2 done, slice 3 expand-step done** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
+**Slices 1-2 done; slice 3 done bar its contract step.**
+
+**Slice 1** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
 seat maps (`SeatMapVersion` / `Section` / `SeatRow` / `Seat`), tenant-scoped like every other
 operational entity, with seat-number-unique-per-row and version-unique-per-hall enforced in the
 database. Additive only - nothing references them yet, so current behaviour is untouched. Migration
@@ -148,22 +150,49 @@ pinning the hall *and the seat-map version* it sells, with per-date cancellation
 dates selling. Also EXPAND-only: `Event.StartsAt` still drives general admission and every existing
 event has zero performances, so behaviour is unchanged. Migration `AddPerformance`.
 
-**Slice 3 is itself staged expand → migrate → contract, and only the EXPAND step is done**
-(`feature/phase-a-ticket-type-performance`): `TicketType.PerformanceId` exists as a **nullable**
-column and is backfilled — every pre-existing event became a one-night run carrying its own
-`StartsAt`. Reads are untouched, so behaviour is unchanged and the step shipped on its own. The
-backfill SQL lives in `PerformanceBackfill` as constants so its tests execute *exactly* what the
+**Slice 3 is itself staged expand → migrate → contract; EXPAND and MIGRATE are done.**
+
+**3a EXPAND** (`feature/phase-a-ticket-type-performance`): `TicketType.PerformanceId` exists as a
+**nullable** column and is backfilled — every pre-existing event became a one-night run carrying its
+own `StartsAt`. Reads were untouched, so behaviour was unchanged and the step shipped on its own.
+The backfill SQL lives in `PerformanceBackfill` as constants so its tests execute *exactly* what the
 migration executes; they pin idempotency (safe on rerun/partial failure/restore) and that an event
 with real dates never gets a phantom synthetic one. Migration `LinkTicketTypeToPerformance`.
 
+**3b MIGRATE** (`feature/phase-a-read-from-performance`): the date now comes from the date row.
+Needed **no migration** — the expand step had already added the column, so this is pure code.
+
+- *Writes stopped producing the old shape*, which is the precondition for 3c: creating an event
+  creates its performance, adding a ticket type attaches it to one, and editing the event's date
+  moves the performance rather than leaving it behind. An event-level date edit deliberately does
+  **nothing** once an event has several dates — "the event moved to the 14th" has no meaning for a
+  thirty-night run, and picking a night would silently move the wrong one.
+- *Reads repointed* on all five surfaces that show a date: staff graph and list, marketplace catalog
+  and event page, organizer storefront. The rule is **the earliest date still scheduled**, excluding
+  cancelled ones, with the legacy column as fallback for rows that have no date row — that fallback
+  is the only thing 3c has to delete. Catalog `from`/`to` filters moved with it.
+- *Two questions, two answers.* `Event.HeadlineDate` summarises a run for a listing;
+  `TicketType.AdmissionDate` names the one night a ticket admits you to. The ticket PDF now prints
+  the second — with a run, the first is simply the wrong date, and a wrong date on a ticket is a
+  customer turned away at the door.
+- *Correction to this plan as written:* the availability projection needed **no** change. It carries
+  ids and re-reads live inventory; it never touched `Event.StartsAt`. Adding `PerformanceId` to
+  `EventAvailabilityView` would have been a column nothing reads, so it waits until something groups
+  availability by date. Organizer UI and checkout needed no change either — the API contract is
+  unchanged, only the *source* of the value moved.
+- The tests drive the performance's date away from the legacy column **directly in the database**
+  (the API cannot, since it keeps them in step) and then ask each surface what date the event is on.
+  That divergence is the only way to tell which column was read. All were confirmed to fail against
+  the pre-3b code.
+
 Remaining, in order:
 
-- **3b MIGRATE (next, the risky one):** repoint reads onto the performance — availability
-  projection, `EventAvailabilityView`, marketplace queries, organizer UI, checkout. Nothing depends
-  on the new column yet, so this is where behaviour actually changes and where the test suite earns
-  its keep.
-- **3c CONTRACT:** make `PerformanceId` required and drop `Event.StartsAt`. Only once 3b has shipped
-  and nothing reads the old shape.
+- **3c CONTRACT (next):** make `PerformanceId` required and drop `Event.StartsAt` — along with the
+  fallbacks in `Event.HeadlineDate`, `TicketType.AdmissionDate`, `EventRepository`'s subqueries and
+  `EnsureTheEventHasADate`, and the `(Status, Category, StartsAt)` index that the ordering no longer
+  uses. Needs one more backfill pass for anything created between the 3a migration and the 3b
+  deploy, then `IsRequired()`. Contract steps are cheap to write and unforgiving to get wrong: the
+  old column has to be provably unread first, which is what the grep for `.StartsAt` now shows.
 - **4** `PriceZone` + `Allocation`.
 - **5** `SeatHold` with the partial unique index on `(performanceId, seatId)`, where the three
   reservation strategies collapse to "insert and let the constraint arbitrate" for reserved seating

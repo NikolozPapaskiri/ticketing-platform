@@ -19,7 +19,11 @@ public interface IEventRepository
     /// <summary>Tracked load for a state change; SaveChangesAsync persists the mutation.</summary>
     Task<Event?> GetForUpdateAsync(Guid id, CancellationToken ct);
 
-    Task<bool> ExistsAsync(Guid id, CancellationToken ct);
+    /// <summary>
+    /// Tracked load including the event's dates, for the writes that have to keep event and
+    /// performance in step: editing the date, and attaching a new ticket type to one.
+    /// </summary>
+    Task<Event?> GetForUpdateWithPerformancesAsync(Guid id, CancellationToken ct);
 
     void Add(Event ev);
     void AddTicketType(TicketType ticketType);
