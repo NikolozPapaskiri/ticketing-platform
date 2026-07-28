@@ -83,11 +83,12 @@ Getting there took two discarded attempts, and the reasons are worth not re-disc
    lease-extension save reached it first rather than the request's own. `PaymentLeaseExtendHoldId`
    now restricts it to one hold, which makes an arrival provably the save under test.
 
-   That hypothesis is **not yet confirmed**: the verifying run died on
-   `DockerUnavailableException` (Docker Desktop dropped mid-session), so the attempt proved nothing
-   and the test was not committed. Re-run it with Docker healthy: arm the gate keyed to the hold,
-   confirm the arrival happens at all, then assert 202 — and prove the test can fail by reverting
-   `TrySaveChangesAsync` to a plain save and expecting a 500.
+   That was the fix. With the gate keyed to the hold the test became meaningful, and reverting
+   `TrySaveChangesAsync` to a plain save now makes it fail with the expected 500.
+
+3. A third attempt looked like it proved the opposite ("the save never reaches the gate") but had
+   actually died on `DockerUnavailableException` — the fixture never started. When a race test fails
+   in ~2ms, read the stack before believing the symptom.
 
 By the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until this exists.
 
