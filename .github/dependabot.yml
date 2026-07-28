@@ -1,30 +1,68 @@
 # Dependency update automation. Dependabot opens PRs for outdated/vulnerable dependencies across
 # every ecosystem this repo uses; CI (build/test, audits, image scan) then gates each PR.
+#
+# Tuned after the first run opened ~19 PRs at once, two of which could never go green:
+#  - GROUPED per ecosystem, so a week's updates arrive as one reviewable PR instead of a dozen.
+#  - MAJORS IGNORED for nuget/npm/docker. Major bumps there are breaking work that needs a
+#    deliberate upgrade (eslint 9 -> 10 and typescript 6 -> 7 both failed CI on sight), not an
+#    automated PR. Run those intentionally; security fixes still arrive as patch/minor.
+#  - GitHub Actions majors are ALLOWED: action majors are how deprecations get fixed (the Node-20
+#    warnings were cleared by checkout v4 -> v7), and they carry no application risk.
 version: 2
 updates:
   - package-ecosystem: nuget
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      nuget:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/apps/web"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: "/apps/web"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docker-web:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
