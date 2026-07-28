@@ -137,7 +137,7 @@ Ordered by value. Each phase is independently shippable and independently demo-a
 
 ### Phase A — Venue, performance, reserved seating — *the highest-value expansion*
 
-**Slices 1-2 of 5 DONE** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
+**Slices 1-2 done, slice 3 expand-step done** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
 seat maps (`SeatMapVersion` / `Section` / `SeatRow` / `Seat`), tenant-scoped like every other
 operational entity, with seat-number-unique-per-row and version-unique-per-hall enforced in the
 database. Additive only - nothing references them yet, so current behaviour is untouched. Migration
@@ -148,12 +148,26 @@ pinning the hall *and the seat-map version* it sells, with per-date cancellation
 dates selling. Also EXPAND-only: `Event.StartsAt` still drives general admission and every existing
 event has zero performances, so behaviour is unchanged. Migration `AddPerformance`.
 
-Remaining slices, in order: **(3)** BACKFILL one performance per existing event, move
-`TicketType`/`Inventory` onto it, then contract `Event.StartsAt` away — this is the slice that
-touches existing tables, the availability projection, and the read model, and it needs its own
-session; **(4)** `PriceZone` + `Allocation`; **(5)** `SeatHold` with the partial unique index on
-`(performanceId, seatId)`, where the three reservation strategies collapse to "insert and let the
-constraint arbitrate" for reserved seating while GA keeps the counter model.
+**Slice 3 is itself staged expand → migrate → contract, and only the EXPAND step is done**
+(`feature/phase-a-ticket-type-performance`): `TicketType.PerformanceId` exists as a **nullable**
+column and is backfilled — every pre-existing event became a one-night run carrying its own
+`StartsAt`. Reads are untouched, so behaviour is unchanged and the step shipped on its own. The
+backfill SQL lives in `PerformanceBackfill` as constants so its tests execute *exactly* what the
+migration executes; they pin idempotency (safe on rerun/partial failure/restore) and that an event
+with real dates never gets a phantom synthetic one. Migration `LinkTicketTypeToPerformance`.
+
+Remaining, in order:
+
+- **3b MIGRATE (next, the risky one):** repoint reads onto the performance — availability
+  projection, `EventAvailabilityView`, marketplace queries, organizer UI, checkout. Nothing depends
+  on the new column yet, so this is where behaviour actually changes and where the test suite earns
+  its keep.
+- **3c CONTRACT:** make `PerformanceId` required and drop `Event.StartsAt`. Only once 3b has shipped
+  and nothing reads the old shape.
+- **4** `PriceZone` + `Allocation`.
+- **5** `SeatHold` with the partial unique index on `(performanceId, seatId)`, where the three
+  reservation strategies collapse to "insert and let the constraint arbitrate" for reserved seating
+  while GA keeps the counter model.
 
 The current model is `Event → TicketType → Inventory`: a flat capacity counter, with `VenueName`
 as a free-text string on `Event`. That is general admission only, and it cannot express what most
