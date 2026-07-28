@@ -38,6 +38,7 @@ public class TicketingDbContext : DbContext
     public DbSet<Ticket> Tickets => Set<Ticket>();
 
     // Phase A: venue geometry. Reusable across events, versioned immutably.
+    public DbSet<Performance> Performances => Set<Performance>();
     public DbSet<Venue> Venues => Set<Venue>();
     public DbSet<Hall> Halls => Set<Hall>();
     public DbSet<SeatMapVersion> SeatMapVersions => Set<SeatMapVersion>();
@@ -238,6 +239,34 @@ public class TicketingDbContext : DbContext
         {
             b.HasKey(m => new { m.MessageId, m.Consumer }); // per-consumer dedupe (fan-out safe)
             b.Property(m => m.Consumer).HasMaxLength(100);
+        });
+
+        modelBuilder.Entity<Performance>(b =>
+        {
+            b.HasKey(p => p.Id);
+            b.Property(p => p.Status).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(p => p.TenantId);
+            // The catalog's real scan path once dates exist: "what is playing, soonest first".
+            b.HasIndex(p => new { p.EventId, p.StartsAt });
+            b.HasIndex(p => new { p.Status, p.StartsAt });
+
+            b.HasOne(p => p.Event)
+                .WithMany(e => e.Performances)
+                .HasForeignKey(p => p.EventId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Geometry is RESTRICTed, not cascaded: deleting a hall or a seat-map version out from
+            // under a performance that sold seats against it would orphan the tickets' meaning.
+            b.HasOne(p => p.Hall)
+                .WithMany()
+                .HasForeignKey(p => p.HallId)
+                .OnDelete(DeleteBehavior.Restrict);
+            b.HasOne(p => p.SeatMapVersion)
+                .WithMany()
+                .HasForeignKey(p => p.SeatMapVersionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            b.HasQueryFilter(p => p.TenantId == CurrentTenantId);
         });
 
         // --- Phase A: venue geometry -----------------------------------------------------------
