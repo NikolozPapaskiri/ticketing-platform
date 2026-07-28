@@ -57,10 +57,14 @@ nullable column). 219 tests green (86 unit + 133 integration).
 
 **Not built, deliberately:** G5 — per its own instruction below.
 
-**Still outstanding: the G2 deterministic race test.** The code change is in and the suite is green,
-but the test that pins the conflict branch does not exist yet. An attempt was made and **discarded
-because it was vacuous** — it passed with the G2 fix reverted, so it proved nothing. Two things were
-learned and are worth not re-discovering:
+**G2's race test now exists and is proven** —
+`PaymentRaceTests.AmbiguousPayment_LosingTheLeaseRace_Returns202_NotServerError`. It freezes the
+request's own lease-extension save, has a competitor move the row with `ExecuteUpdateAsync`, releases,
+and asserts 202. Verified to FAIL on the pre-G2 code (`Expected: Accepted / Actual:
+InternalServerError`), so it pins the defect rather than merely passing. **Gate 0 is now closed for
+G1–G4** (G5 remains deliberately unbuilt).
+
+Getting there took two discarded attempts, and the reasons are worth not re-discovering:
 
 1. `FaultInterceptor.PaymentLeaseExtendGate` now exists as the seam, and the detector has to
    distinguish an **extension** from the initial **claim**: both leave the hold `PaymentPending` with

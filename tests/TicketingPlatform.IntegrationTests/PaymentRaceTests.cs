@@ -149,6 +149,55 @@ public sealed class PaymentRaceTests
     private sealed record HoldContext(
         string StaffToken, string CustomerToken, Guid EventId, Guid TicketTypeId, Guid HoldId);
 
+    // ---- Gate 0 / G2: the ambiguous-payment path degrades, it does not 500 -----------------
+
+    [Fact]
+    public async Task AmbiguousPayment_LosingTheLeaseRace_Returns202_NotServerError()
+    {
+        var ctx = await ArrangeOnSaleHoldAsync(capacity: 5, quantity: 1);
+
+        // Provider unreachable => checkout takes the ambiguous path: keep the durable claim and
+        // push the hold's payment lease out for reconciliation (or a retry) to settle.
+        _factory.Gateway.ChargeResponder = _ => PaymentResult.Unavailable();
+
+        // Freeze THIS hold's lease-extension save. Keying the gate to the hold is what makes the
+        // arrival provably the request's own save rather than some other writer's.
+        _factory.Fault.PaymentLeaseExtendHoldId = ctx.HoldId;
+        _factory.Fault.PaymentLeaseExtendGate.Arm(1);
+
+        var checkout = PostOrderAsync(ctx.CustomerToken, ctx.HoldId, idempotencyKey: "ambiguous-race");
+        await _factory.Fault.PaymentLeaseExtendGate.WaitForArrivalsAsync(1, TimeSpan.FromSeconds(15));
+
+        // While it is frozen, a competitor - the reconciler, or another replica - re-leases the same
+        // hold. ExecuteUpdate bypasses the change tracker, so it does not trip the gate, and it
+        // moves the row's xmin: the frozen save is now guaranteed to lose the compare-and-swap.
+        // A DIFFERENT value matters; rewriting the value the row already holds emits no UPDATE.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+            var moved = await db.Holds.IgnoreQueryFilters()
+                .Where(h => h.Id == ctx.HoldId)
+                .ExecuteUpdateAsync(s => s.SetProperty(
+                    h => h.PaymentLeaseUntil, DateTimeOffset.UtcNow.AddMinutes(45)));
+            Assert.Equal(1, moved);
+        }
+
+        _factory.Fault.PaymentLeaseExtendGate.Release();
+        var response = await checkout;
+
+        // Before G2 the losing save threw DbUpdateConcurrencyException and the client got a 500 -
+        // on the one path whose whole purpose is to degrade gracefully. Now the loser re-reads and
+        // reports what the winner left: still PendingPayment, so 202 and reconciliation continues.
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+            var order = await db.Orders.IgnoreQueryFilters().FirstAsync(o => o.HoldId == ctx.HoldId);
+            Assert.Equal(OrderStatus.PendingPayment, order.Status); // durable claim intact
+        }
+    }
+
     private async Task<HoldContext> ArrangeOnSaleHoldAsync(int capacity, int quantity)
     {
         var (_, staff) = await _client.CreateTenantWithStaffAsync();
