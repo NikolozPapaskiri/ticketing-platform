@@ -74,10 +74,16 @@ learned and are worth not re-discovering:
    actually changed, because writing the value the row already holds produces no `UPDATE` and
    therefore no conflict, which is the trap to avoid when building the HTTP-level version.
 
-   What remains unexplained is why the HTTP attempt saw a gate arrival yet its save did not conflict.
-   The next debugging step is to identify **which `DbContext` arrives at the gate** (log or capture the
-   instance) before asserting anything about the response — the arrival may not have been the
-   request's.
+   The unexplained part was why the HTTP attempt saw a gate arrival yet its save did not conflict.
+   The likely answer is that the gate was **not scoped to a hold**, so it fired for whichever
+   lease-extension save reached it first rather than the request's own. `PaymentLeaseExtendHoldId`
+   now restricts it to one hold, which makes an arrival provably the save under test.
+
+   That hypothesis is **not yet confirmed**: the verifying run died on
+   `DockerUnavailableException` (Docker Desktop dropped mid-session), so the attempt proved nothing
+   and the test was not committed. Re-run it with Docker healthy: arm the gate keyed to the hold,
+   confirm the arrival happens at all, then assert 202 — and prove the test can fail by reverting
+   `TrySaveChangesAsync` to a plain save and expecting a 500.
 
 By the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until this exists.
 
