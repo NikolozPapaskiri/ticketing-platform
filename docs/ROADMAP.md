@@ -141,9 +141,19 @@ Ordered by value. Each phase is independently shippable and independently demo-a
 seat maps (`SeatMapVersion` / `Section` / `SeatRow` / `Seat`), tenant-scoped like every other
 operational entity, with seat-number-unique-per-row and version-unique-per-hall enforced in the
 database. Additive only - nothing references them yet, so current behaviour is untouched. Migration
-`AddVenueGeometry`. Remaining slices, in order: **(2)** the `Event`/`Performance` split, **(3)**
-`PriceZone` + `Allocation`, **(4)** `SeatHold` with the partial unique index on
-`(performanceId, seatId)`. Slice 2 is the one that touches existing tables and the read model.
+`AddVenueGeometry`.
+
+**Slice 2** (`feature/phase-a-performance`) added **`Performance`** — the scheduled occurrence —
+pinning the hall *and the seat-map version* it sells, with per-date cancellation that leaves sibling
+dates selling. Also EXPAND-only: `Event.StartsAt` still drives general admission and every existing
+event has zero performances, so behaviour is unchanged. Migration `AddPerformance`.
+
+Remaining slices, in order: **(3)** BACKFILL one performance per existing event, move
+`TicketType`/`Inventory` onto it, then contract `Event.StartsAt` away — this is the slice that
+touches existing tables, the availability projection, and the read model, and it needs its own
+session; **(4)** `PriceZone` + `Allocation`; **(5)** `SeatHold` with the partial unique index on
+`(performanceId, seatId)`, where the three reservation strategies collapse to "insert and let the
+constraint arbitrate" for reserved seating while GA keeps the counter model.
 
 The current model is `Event → TicketType → Inventory`: a flat capacity counter, with `VenueName`
 as a free-text string on `Event`. That is general admission only, and it cannot express what most
