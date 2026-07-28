@@ -137,7 +137,7 @@ Ordered by value. Each phase is independently shippable and independently demo-a
 
 ### Phase A — Venue, performance, reserved seating — *the highest-value expansion*
 
-**Slices 1-2 done; slice 3 done bar its contract step.**
+**Slices 1-3 done.** The `Event → TicketType` model is now `Event → Performance → TicketType`.
 
 **Slice 1** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
 seat maps (`SeatMapVersion` / `Section` / `SeatRow` / `Seat`), tenant-scoped like every other
@@ -185,14 +185,38 @@ Needed **no migration** — the expand step had already added the column, so thi
   That divergence is the only way to tell which column was read. All were confirmed to fail against
   the pre-3b code.
 
+**3c CONTRACT** (`feature/phase-a-contract-performance`): two migrations, in that order.
+
+- `RequireTicketTypePerformance` re-runs the **same** backfill the expand step used — safe only
+  because it was written idempotent, the payoff for that decision arriving a slice later — then sets
+  `PerformanceId` NOT NULL. The scaffolded `AlterColumn` proposed an all-zeros default; removed, so
+  `SET NOT NULL` fails loudly on a leftover row instead of attaching tickets to a date that does not
+  exist. The invariant moves out of convention and into the schema.
+- `DropEventStartsAt` removes the column and swaps the catalog index to `(Status, Category)` —
+  ordering is served by `Performances (EventId, StartsAt)` now. Its `Down()` restores the **data**,
+  not just the column: the scaffolded default parks every event at year 1, which a rollback would
+  surface as a catalog of nonsense dates with nothing failing to say so.
+
+**What the column was hiding.** A non-nullable date on the event meant every event *had* a date, so
+an event with nothing scheduled — dates unannounced, or every night called off — was represented by
+a date that was simply false. Null is the honest answer, and the two audiences want opposite things:
+
+- **Staff** shapes expose it nullable; an organizer is exactly who needs to see "no dates scheduled",
+  and those sort last in the list.
+- **Public** shapes keep it required, because `PublicScope.OnSaleEvents()` now also requires a
+  scheduled date. An event no one can buy a ticket to — a ticket type needs a performance — has no
+  business in the catalog, and the buyer-facing projections then have no null to answer for.
+
+**Two test casualties, both honest and worth knowing about.** `PerformanceBackfillTests` is gone:
+its SQL reads `Events."StartsAt"`, so it cannot execute against the new schema at all — *a contract
+step retires the tests of the migration it completes*. Its surviving guarantee became a constraint
+test. And `PerformanceScheduleTests` asserted that an event with no performances still had a working
+`Event.StartsAt`; that was the transitional promise this step exists to retire, so it now asserts
+the opposite. The backfill SQL stays in `PerformanceBackfill` marked HISTORICAL — the two migrations
+that precede the drop must keep executing exactly that text when a database is built from scratch.
+
 Remaining, in order:
 
-- **3c CONTRACT (next):** make `PerformanceId` required and drop `Event.StartsAt` — along with the
-  fallbacks in `Event.HeadlineDate`, `TicketType.AdmissionDate`, `EventRepository`'s subqueries and
-  `EnsureTheEventHasADate`, and the `(Status, Category, StartsAt)` index that the ordering no longer
-  uses. Needs one more backfill pass for anything created between the 3a migration and the 3b
-  deploy, then `IsRequired()`. Contract steps are cheap to write and unforgiving to get wrong: the
-  old column has to be provably unread first, which is what the grep for `.StartsAt` now shows.
 - **4** `PriceZone` + `Allocation`.
 - **5** `SeatHold` with the partial unique index on `(performanceId, seatId)`, where the three
   reservation strategies collapse to "insert and let the constraint arbitrate" for reserved seating
