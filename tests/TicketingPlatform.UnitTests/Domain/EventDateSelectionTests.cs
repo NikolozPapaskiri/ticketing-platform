@@ -95,21 +95,4 @@ public class EventDateSelectionTests
         Assert.Equal(now.AddDays(10), ev.HeadlineDate);
     }
 
-    [Fact]
-    public void ATicketTypeWithNoNightYet_FallsBackToTheLegacyColumn()
-    {
-        var startsAt = DateTimeOffset.UtcNow.AddDays(3);
-        var ev = AnEvent(startsAt);
-        var ticketType = new TicketType
-        {
-            Id = Guid.NewGuid(),
-            TenantId = ev.TenantId,
-            EventId = ev.Id,
-            Event = ev,
-            Name = "GA",
-            Currency = "USD"
-        };
-
-        Assert.Equal(startsAt, ticketType.AdmissionDate);
-    }
 }

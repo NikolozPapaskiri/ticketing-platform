@@ -64,12 +64,23 @@ public class LeaseConcurrencyDiagnosticTests
             StartsAt = DateTimeOffset.UtcNow.AddDays(30)
         });
 
+        var performanceId = Guid.NewGuid();
+        db.Performances.Add(new Performance
+        {
+            Id = performanceId,
+            TenantId = tenantId,
+            EventId = eventId,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(30),
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+
         var ticketTypeId = Guid.NewGuid();
         db.TicketTypes.Add(new TicketType
         {
             Id = ticketTypeId,
             TenantId = tenantId,
             EventId = eventId,
+            PerformanceId = performanceId, // required since the contract step: a price is per date
             Name = "General Admission",
             Price = 25m,
             Currency = "USD"

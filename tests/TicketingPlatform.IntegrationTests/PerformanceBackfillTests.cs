@@ -7,9 +7,14 @@ using TicketingPlatform.Infrastructure.Persistence.Migrations;
 namespace TicketingPlatform.IntegrationTests;
 
 /// <summary>
-/// Phase A slice 3, the expand step. A data migration normally runs exactly once, in production,
-/// untested - so these execute the SAME statements the migration does against deliberately
-/// legacy-shaped rows (an event with ticket types and no performance) and assert the result.
+/// Phase A slice 3. A data migration normally runs exactly once, in production, untested - so these
+/// execute the SAME statements the migration does and assert the result.
+///
+/// The contract step ran the same backfill a second time and then made TicketType.PerformanceId
+/// NOT NULL, which deliberately makes the old shape unrepresentable: a ticket type with no date can
+/// no longer be inserted, so the half of this file that asserted ticket types being LINKED cannot
+/// be written any more. The database now enforces what it used to check - see
+/// ATicketTypeWithNoDate_IsRejectedByTheDatabase below, which is the replacement.
 /// </summary>
 [Collection(nameof(ApiCollection))]
 public class PerformanceBackfillTests
@@ -18,9 +23,9 @@ public class PerformanceBackfillTests
     public PerformanceBackfillTests(TicketingApiFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task EveryLegacyEventBecomesAOneNightRun_WithItsTicketTypesAttached()
+    public async Task EveryLegacyEventBecomesAOneNightRun()
     {
-        var (tenantId, eventId, startsAt) = await SeedLegacyEventAsync(ticketTypes: 2);
+        var (tenantId, eventId, startsAt) = await SeedLegacyEventAsync();
 
         await RunBackfillAsync();
 
@@ -33,18 +38,40 @@ public class PerformanceBackfillTests
         Assert.Equal(tenantId, performance.TenantId);            // tenancy is carried over, not lost
         // The synthetic date is the event's own date - a one-night run, which is what a flat event was.
         Assert.Equal(startsAt.ToUniversalTime(), performance.StartsAt.ToUniversalTime(), TimeSpan.FromSeconds(1));
+    }
 
-        var ticketTypes = await db.TicketTypes.Where(t => t.EventId == eventId).ToListAsync();
-        Assert.Equal(2, ticketTypes.Count);
-        Assert.All(ticketTypes, t => Assert.Equal(performance.Id, t.PerformanceId));
+    [Fact]
+    public async Task ATicketTypeWithNoDate_IsRejectedByTheDatabase()
+    {
+        var (tenantId, eventId, _) = await SeedLegacyEventAsync();
+
+        using var scope = _factory.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<TicketingPlatform.Api.Tenancy.TenantContext>().SetTenant(tenantId);
+        var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        db.TicketTypes.Add(new TicketType
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            EventId = eventId,
+            Name = "Dateless",
+            Price = 10m,
+            Currency = "USD"
+            // PerformanceId left unset: the legacy shape, now unrepresentable.
+        });
+
+        // The point of the contract step: the invariant is the schema's job, not a convention that
+        // every future write path has to remember. Guid.Empty names no performance, so the foreign
+        // key rejects it - there is no way to write a ticket type that belongs to no date.
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
     }
 
     [Fact]
     public async Task RunningTheBackfillTwice_ChangesNothingTheSecondTime()
     {
         // Migrations are once-only, but a backfill that is not idempotent is a trap for reruns,
-        // partial failures, and restores. The NOT EXISTS guard is what makes this safe.
-        var (tenantId, eventId, _) = await SeedLegacyEventAsync(ticketTypes: 1);
+        // partial failures, and restores. The NOT EXISTS guard is what makes this safe - and it is
+        // what let the contract step re-run the very same statements before adding the constraint.
+        var (tenantId, eventId, _) = await SeedLegacyEventAsync();
 
         await RunBackfillAsync();
         await RunBackfillAsync();
@@ -59,7 +86,7 @@ public class PerformanceBackfillTests
     [Fact]
     public async Task AnEventThatAlreadyHasRealDates_IsNotGivenASyntheticOne()
     {
-        var (tenantId, eventId, _) = await SeedLegacyEventAsync(ticketTypes: 0);
+        var (tenantId, eventId, _) = await SeedLegacyEventAsync();
 
         // Give it two genuine dates first, as a multi-date production would have.
         using (var scope = _factory.Services.CreateScope())
@@ -97,8 +124,8 @@ public class PerformanceBackfillTests
         await db.Database.ExecuteSqlRawAsync(PerformanceBackfill.LinkTicketTypesToTheirPerformance);
     }
 
-    /// <summary>An event in the pre-slice-3 shape: ticket types hanging off the event, no date row.</summary>
-    private async Task<(Guid TenantId, Guid EventId, DateTimeOffset StartsAt)> SeedLegacyEventAsync(int ticketTypes)
+    /// <summary>An event in the pre-slice-3 shape: a date on the event itself, no date row.</summary>
+    private async Task<(Guid TenantId, Guid EventId, DateTimeOffset StartsAt)> SeedLegacyEventAsync()
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
@@ -116,28 +143,6 @@ public class PerformanceBackfillTests
             VenueName = "QA Hall",
             StartsAt = startsAt
         });
-
-        for (var i = 0; i < ticketTypes; i++)
-        {
-            var ticketTypeId = Guid.NewGuid();
-            db.TicketTypes.Add(new TicketType
-            {
-                Id = ticketTypeId,
-                TenantId = tenantId,
-                EventId = eventId,
-                Name = i == 0 ? "General Admission" : $"Tier {i}",
-                Price = 25m + i,
-                Currency = "USD"
-                // PerformanceId deliberately left null: this is the legacy shape.
-            });
-            db.Inventories.Add(new Inventory
-            {
-                TicketTypeId = ticketTypeId,
-                TenantId = tenantId,
-                TotalQuantity = 10,
-                AvailableQuantity = 10
-            });
-        }
 
         await db.SaveChangesAsync();
         return (tenantId, eventId, startsAt);
