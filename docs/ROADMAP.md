@@ -90,7 +90,8 @@ Getting there took two discarded attempts, and the reasons are worth not re-disc
    actually died on `DockerUnavailableException` — the fixture never started. When a race test fails
    in ~2ms, read the stack before believing the symptom.
 
-By the gate's own wording ("plus the new race test"), Gate 0 is not fully closed until this exists.
+The gate's own wording — "the full integration suite green with Docker running, plus the new race
+test" — is therefore satisfied for G1–G4.
 
 ### G1. Refund-status inquiry — *P1*
 Add `GetRefundStatusAsync(refundIdempotencyKey)` returning `Refunded(providerRefundId) |
