@@ -37,6 +37,14 @@ public class TicketingDbContext : DbContext
     public DbSet<EventAvailabilityView> EventAvailability => Set<EventAvailabilityView>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
 
+    // Phase A: venue geometry. Reusable across events, versioned immutably.
+    public DbSet<Venue> Venues => Set<Venue>();
+    public DbSet<Hall> Halls => Set<Hall>();
+    public DbSet<SeatMapVersion> SeatMapVersions => Set<SeatMapVersion>();
+    public DbSet<Section> Sections => Set<Section>();
+    public DbSet<SeatRow> SeatRows => Set<SeatRow>();
+    public DbSet<Seat> Seats => Set<Seat>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Tenant: top-level owner, NOT tenant-scoped (no TenantId, no query filter).
@@ -230,6 +238,92 @@ public class TicketingDbContext : DbContext
         {
             b.HasKey(m => new { m.MessageId, m.Consumer }); // per-consumer dedupe (fan-out safe)
             b.Property(m => m.Consumer).HasMaxLength(100);
+        });
+
+        // --- Phase A: venue geometry -----------------------------------------------------------
+        // Tenant-owned like every other operational entity, so the same query filter (and the same
+        // TenantScope) governs them. Nothing here references Event yet: this slice is additive, so
+        // the existing Event -> TicketType -> Inventory path is untouched.
+
+        modelBuilder.Entity<Venue>(b =>
+        {
+            b.HasKey(v => v.Id);
+            b.Property(v => v.Name).IsRequired().HasMaxLength(200);
+            b.Property(v => v.AddressLine).HasMaxLength(300);
+            b.Property(v => v.City).HasMaxLength(120);
+            b.Property(v => v.CountryCode).HasMaxLength(2);
+            b.Property(v => v.TimeZoneId).HasMaxLength(64);
+            b.HasIndex(v => v.TenantId);
+            b.HasMany(v => v.Halls)
+                .WithOne(h => h.Venue)
+                .HasForeignKey(h => h.VenueId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasQueryFilter(v => v.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<Hall>(b =>
+        {
+            b.HasKey(h => h.Id);
+            b.Property(h => h.Name).IsRequired().HasMaxLength(200);
+            b.HasIndex(h => h.TenantId);
+            b.HasMany(h => h.SeatMapVersions)
+                .WithOne(s => s.Hall)
+                .HasForeignKey(s => s.HallId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasQueryFilter(h => h.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<SeatMapVersion>(b =>
+        {
+            b.HasKey(s => s.Id);
+            b.Property(s => s.Notes).HasMaxLength(500);
+            b.HasIndex(s => s.TenantId);
+            // Version numbers are the human-facing identity of a layout, so they must not repeat
+            // within a hall - this is the database half of "a change publishes a NEW version".
+            b.HasIndex(s => new { s.HallId, s.Version }).IsUnique();
+            b.HasMany(s => s.Sections)
+                .WithOne(sec => sec.SeatMapVersion)
+                .HasForeignKey(sec => sec.SeatMapVersionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasQueryFilter(s => s.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<Section>(b =>
+        {
+            b.HasKey(s => s.Id);
+            b.Property(s => s.Name).IsRequired().HasMaxLength(100);
+            b.HasIndex(s => s.TenantId);
+            b.HasMany(s => s.Rows)
+                .WithOne(r => r.Section)
+                .HasForeignKey(r => r.SectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasQueryFilter(s => s.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<SeatRow>(b =>
+        {
+            b.HasKey(r => r.Id);
+            b.Property(r => r.Label).IsRequired().HasMaxLength(20);
+            b.HasIndex(r => r.TenantId);
+            b.HasMany(r => r.Seats)
+                .WithOne(s => s.SeatRow)
+                .HasForeignKey(s => s.SeatRowId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasQueryFilter(r => r.TenantId == CurrentTenantId);
+        });
+
+        modelBuilder.Entity<Seat>(b =>
+        {
+            b.HasKey(s => s.Id);
+            b.Property(s => s.Number).IsRequired().HasMaxLength(20);
+            b.Property(s => s.Kind).HasConversion<string>().HasMaxLength(20);
+            b.Property(s => s.MapX).HasPrecision(9, 2);
+            b.Property(s => s.MapY).HasPrecision(9, 2);
+            b.HasIndex(s => s.TenantId);
+            // Seat IDENTITY: one "12" per row. Geometry may move freely; the printed identity may not
+            // collide, because that is what the door reads off the ticket.
+            b.HasIndex(s => new { s.SeatRowId, s.Number }).IsUnique();
+            b.HasQueryFilter(s => s.TenantId == CurrentTenantId);
         });
 
         modelBuilder.Entity<Ticket>(b =>
