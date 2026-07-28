@@ -51,8 +51,10 @@ public sealed class EventRepository : IEventRepository
         // Tracked on purpose: the caller mutates Status and SaveChangesAsync diffs the snapshot.
         _db.Events.FirstOrDefaultAsync(e => e.Id == id, ct);
 
-    public Task<bool> ExistsAsync(Guid id, CancellationToken ct) =>
-        _db.Events.AnyAsync(e => e.Id == id, ct);
+    public Task<Event?> GetForUpdateWithPerformancesAsync(Guid id, CancellationToken ct) =>
+        _db.Events
+            .Include(e => e.Performances)
+            .FirstOrDefaultAsync(e => e.Id == id, ct);
 
     public void Add(Event ev) => _db.Events.Add(ev);
 

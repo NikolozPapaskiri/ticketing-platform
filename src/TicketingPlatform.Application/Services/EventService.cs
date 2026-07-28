@@ -139,22 +139,28 @@ public sealed class EventService
             // Status defaults to Draft — the entity owns that invariant.
         };
 
+        // The date the caller sent becomes a real performance, not just a column. The single-date
+        // API still describes a one-night run, but from here on the run is the thing that exists -
+        // which is what lets the contract step drop Event.StartsAt without inventing data.
+        ev.Performances.Add(NewPerformance(ev, request.StartsAt));
+
         _events.Add(ev);
         await _events.SaveChangesAsync(ct);
 
         return new EventResponse(
-            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(),
+            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.HeadlineDate, ev.Status.ToString(),
             ev.Category.ToString(), ev.ImagePath is not null, ev.WaitingRoomEnabled, []);
     }
 
     public async Task<Result<EventResponse>> UpdateAsync(Guid tenantId, Guid id, UpdateEventRequest request, CancellationToken ct)
     {
-        var ev = await _events.GetForUpdateAsync(id, ct);
+        var ev = await _events.GetForUpdateWithPerformancesAsync(id, ct);
         if (ev is null)
             return Result<EventResponse>.NotFound($"Event '{id}' was not found.");
 
         ev.UpdateDetails(request.Name, request.Description, request.VenueName, request.StartsAt,
             ParseCategory(request.Category));
+        MoveTheSingleDate(ev, request.StartsAt);
         // Null means "not sent" (older clients), not "turn it off".
         if (request.WaitingRoomEnabled is { } waitingRoom)
             ev.WaitingRoomEnabled = waitingRoom;
@@ -162,22 +168,29 @@ public sealed class EventService
 
         await _cache.RemoveAsync(EventGraphKey(tenantId, id), ct);
         return Result<EventResponse>.Success(new EventResponse(
-            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.StartsAt, ev.Status.ToString(),
+            ev.Id, ev.Name, ev.Description, ev.VenueName, ev.HeadlineDate, ev.Status.ToString(),
             ev.Category.ToString(), ev.ImagePath is not null, ev.WaitingRoomEnabled, []));
     }
 
     public async Task<Result<TicketTypeResponse>> AddTicketTypeAsync(
         Guid tenantId, Guid eventId, CreateTicketTypeRequest request, CancellationToken ct)
     {
-        // Tenant-scoped exists check: another tenant's event is invisible => NotFound, not Forbidden.
-        if (!await _events.ExistsAsync(eventId, ct))
+        // Tenant-scoped load: another tenant's event is invisible => NotFound, not Forbidden.
+        var ev = await _events.GetForUpdateWithPerformancesAsync(eventId, ct);
+        if (ev is null)
             return Result<TicketTypeResponse>.NotFound($"Event '{eventId}' was not found.");
+
+        // A ticket type is sold FOR A DATE - price and capacity differ between a Saturday night and
+        // a Tuesday matinee. The single-date API can only mean the event's one date, so that is the
+        // one it attaches to; a per-date ticket type endpoint is what makes multi-date sellable.
+        var performance = EnsureTheEventHasADate(ev);
 
         var ticketType = new TicketType
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId,
             EventId = eventId,
+            PerformanceId = performance.Id,
             Name = request.Name,
             Price = request.Price,
             Currency = request.Currency,
@@ -307,12 +320,65 @@ public sealed class EventService
         return (stream, contentType);
     }
 
+    private static Performance NewPerformance(Event ev, DateTimeOffset startsAt) => new()
+    {
+        Id = Guid.NewGuid(),
+        TenantId = ev.TenantId,
+        EventId = ev.Id,
+        StartsAt = startsAt,
+        CreatedAt = DateTimeOffset.UtcNow
+    };
+
+    /// <summary>
+    /// Every event has at least one date: new ones get theirs at creation and older ones were
+    /// covered by the backfill, so this only fires for an event created in the window between the
+    /// two - or seeded straight into the database. It reads the legacy column, which is the last
+    /// thing left doing so; the contract step deletes the column and this branch together.
+    /// </summary>
+    private static Performance EnsureTheEventHasADate(Event ev)
+    {
+        var earliest = ev.Performances
+            .OrderBy(p => p.StartsAt)
+            .ThenBy(p => p.Id)
+            .FirstOrDefault();
+        if (earliest is not null)
+            return earliest;
+
+        var created = NewPerformance(ev, ev.StartsAt);
+        ev.Performances.Add(created);
+        return created;
+    }
+
+    /// <summary>
+    /// Keeps the event's one date and its one performance in step while the API still speaks in a
+    /// single StartsAt. Deliberately does nothing once an event has several dates: "the event moved
+    /// to the 14th" has no meaning for a thirty-night run, and guessing which night was meant would
+    /// silently move the wrong one. Rescheduling a specific date is its own endpoint, later.
+    /// </summary>
+    private static void MoveTheSingleDate(Event ev, DateTimeOffset startsAt)
+    {
+        if (ev.Performances.Count == 0)
+        {
+            ev.Performances.Add(NewPerformance(ev, startsAt));
+            return;
+        }
+
+        if (ev.Performances.Count > 1)
+            return;
+
+        var only = ev.Performances.First();
+        // A cancelled date is terminal - Reschedule would throw, and reviving it is not what an
+        // edit to the event's details should ever do.
+        if (only.Status == PerformanceStatus.Scheduled)
+            only.Reschedule(startsAt);
+    }
+
     private static EventResponse Map(Event ev) => new(
         ev.Id,
         ev.Name,
         ev.Description,
         ev.VenueName,
-        ev.StartsAt,
+        ev.HeadlineDate,
         ev.Status.ToString(),
         ev.Category.ToString(),
         ev.ImagePath is not null,

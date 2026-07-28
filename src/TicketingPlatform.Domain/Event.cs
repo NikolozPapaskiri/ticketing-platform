@@ -26,17 +26,43 @@ public class Event
     /// </summary>
     public bool WaitingRoomEnabled { get; set; }
 
+    /// <summary>
+    /// LEGACY. The date now lives on <see cref="Performance"/>; this column survives only as the
+    /// fallback for rows that have no date row yet, and the contract step deletes it. Read
+    /// <see cref="HeadlineDate"/> instead - nothing outside that property should touch this.
+    /// </summary>
     public DateTimeOffset StartsAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<TicketType> TicketTypes { get; set; } = new List<TicketType>();
 
     /// <summary>
-    /// The dates this production plays. Empty today: StartsAt above still drives the current GA
-    /// path, and the follow-on slice backfills one performance per event before moving ticket
-    /// types onto them. See Performance for why the show and the date are separate things.
+    /// The dates this production plays. Every event has at least one: new ones get theirs at
+    /// creation, and everything older was covered by the LinkTicketTypeToPerformance backfill.
+    /// See Performance for why the show and the date are separate things.
     /// </summary>
     public ICollection<Performance> Performances { get; set; } = new List<Performance>();
+
+    /// <summary>
+    /// The one date shown for the event as a whole: its earliest date still scheduled. An event is
+    /// a run, not a moment, so "the" date is a summary - cancelled dates are excluded because an
+    /// event should never advertise a night it has called off.
+    ///
+    /// IN-MEMORY ONLY: it reads a loaded collection, so EF cannot translate it. Queries inline the
+    /// equivalent correlated subquery (see EventRepository); the two must be kept in step until the
+    /// contract step deletes the fallback below.
+    /// </summary>
+    public DateTimeOffset HeadlineDate
+    {
+        get
+        {
+            var scheduled = Performances
+                .Where(p => p.Status == PerformanceStatus.Scheduled)
+                .Select(p => (DateTimeOffset?)p.StartsAt)
+                .Min();
+            return scheduled ?? StartsAt;
+        }
+    }
 
     public EventStatus Status { get; private set; } = EventStatus.Draft;
 

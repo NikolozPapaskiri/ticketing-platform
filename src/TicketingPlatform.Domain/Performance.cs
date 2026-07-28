@@ -35,6 +35,7 @@ public class Performance
     public Guid? SeatMapVersionId { get; set; }
     public SeatMapVersion? SeatMapVersion { get; set; }
 
+    /// <summary>Set at creation; changed afterwards through <see cref="Reschedule"/>.</summary>
     public DateTimeOffset StartsAt { get; set; }
     public DateTimeOffset? DoorsOpenAt { get; set; }
 
@@ -54,6 +55,17 @@ public class Performance
             throw new InvalidOperationException("This performance is already cancelled.");
         Status = PerformanceStatus.Cancelled;
         CancelledAt = now;
+    }
+
+    /// <summary>
+    /// Move this date. A cancelled performance is terminal, so rescheduling one would silently
+    /// resurrect a date whose tickets were already refunded - schedule a new performance instead.
+    /// </summary>
+    public void Reschedule(DateTimeOffset startsAt)
+    {
+        if (Status == PerformanceStatus.Cancelled)
+            throw new InvalidOperationException("A cancelled performance cannot be rescheduled.");
+        StartsAt = startsAt;
     }
 
     /// <summary>A cancelled date sells nothing, whatever the parent event's status says.</summary>
