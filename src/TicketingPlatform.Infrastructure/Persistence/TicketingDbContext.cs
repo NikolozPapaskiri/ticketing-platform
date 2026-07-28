@@ -70,8 +70,10 @@ public class TicketingDbContext : DbContext
             b.Property(e => e.Category).HasConversion<string>().HasMaxLength(20);
             b.Property(e => e.ImagePath).HasMaxLength(500);
             b.HasIndex(e => e.TenantId);
-            // The marketplace catalog's scan path: OnSale + category + date ordering.
-            b.HasIndex(e => new { e.Status, e.Category, e.StartsAt });
+            // The marketplace catalog's scan path. The date left this table with the contract step,
+            // so ordering is served by Performances' (EventId, StartsAt) index instead; what remains
+            // here is the visibility-and-category filter that narrows the set first.
+            b.HasIndex(e => new { e.Status, e.Category });
             b.HasMany(e => e.TicketTypes)
                 .WithOne(tt => tt.Event)
                 .HasForeignKey(tt => tt.EventId)
@@ -93,11 +95,13 @@ public class TicketingDbContext : DbContext
                 .HasForeignKey<Inventory>(i => i.TicketTypeId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            // Phase A slice 3 (expand): nullable while both shapes coexist. RESTRICT so a performance
-            // that still has ticket types cannot be deleted out from under them.
+            // Phase A slice 3 (contract): required now that every ticket type has been backfilled
+            // onto a date and nothing reads the old shape. RESTRICT so a performance that still has
+            // ticket types cannot be deleted out from under them.
             b.HasOne(tt => tt.Performance)
                 .WithMany()
                 .HasForeignKey(tt => tt.PerformanceId)
+                .IsRequired()
                 .OnDelete(DeleteBehavior.Restrict);
             b.HasIndex(tt => tt.PerformanceId);
 

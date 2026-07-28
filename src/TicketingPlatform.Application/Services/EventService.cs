@@ -132,7 +132,6 @@ public sealed class EventService
             Name = request.Name,
             Description = request.Description,
             VenueName = request.VenueName,
-            StartsAt = request.StartsAt,
             Category = ParseCategory(request.Category),
             WaitingRoomEnabled = request.WaitingRoomEnabled ?? false,
             CreatedAt = DateTimeOffset.UtcNow
@@ -158,8 +157,7 @@ public sealed class EventService
         if (ev is null)
             return Result<EventResponse>.NotFound($"Event '{id}' was not found.");
 
-        ev.UpdateDetails(request.Name, request.Description, request.VenueName, request.StartsAt,
-            ParseCategory(request.Category));
+        ev.UpdateDetails(request.Name, request.Description, request.VenueName, ParseCategory(request.Category));
         MoveTheSingleDate(ev, request.StartsAt);
         // Null means "not sent" (older clients), not "turn it off".
         if (request.WaitingRoomEnabled is { } waitingRoom)
@@ -181,9 +179,17 @@ public sealed class EventService
             return Result<TicketTypeResponse>.NotFound($"Event '{eventId}' was not found.");
 
         // A ticket type is sold FOR A DATE - price and capacity differ between a Saturday night and
-        // a Tuesday matinee. The single-date API can only mean the event's one date, so that is the
-        // one it attaches to; a per-date ticket type endpoint is what makes multi-date sellable.
-        var performance = EnsureTheEventHasADate(ev);
+        // a Tuesday matinee. The single-date API can only mean the event's earliest date, so that is
+        // the one it attaches to; a per-date ticket type endpoint is what makes multi-date sellable.
+        var performance = ev.Performances
+            .OrderBy(p => p.StartsAt)
+            .ThenBy(p => p.Id)
+            .FirstOrDefault();
+        if (performance is null)
+            // Reachable only for an event with no schedule at all. The database would refuse the
+            // insert anyway; a 409 says why instead of surfacing a foreign-key violation.
+            return Result<TicketTypeResponse>.Conflict(
+                $"Event '{eventId}' has no dates scheduled. Schedule one before adding ticket types.");
 
         var ticketType = new TicketType
         {
@@ -328,26 +334,6 @@ public sealed class EventService
         StartsAt = startsAt,
         CreatedAt = DateTimeOffset.UtcNow
     };
-
-    /// <summary>
-    /// Every event has at least one date: new ones get theirs at creation and older ones were
-    /// covered by the backfill, so this only fires for an event created in the window between the
-    /// two - or seeded straight into the database. It reads the legacy column, which is the last
-    /// thing left doing so; the contract step deletes the column and this branch together.
-    /// </summary>
-    private static Performance EnsureTheEventHasADate(Event ev)
-    {
-        var earliest = ev.Performances
-            .OrderBy(p => p.StartsAt)
-            .ThenBy(p => p.Id)
-            .FirstOrDefault();
-        if (earliest is not null)
-            return earliest;
-
-        var created = NewPerformance(ev, ev.StartsAt);
-        ev.Performances.Add(created);
-        return created;
-    }
 
     /// <summary>
     /// Keeps the event's one date and its one performance in step while the API still speaks in a

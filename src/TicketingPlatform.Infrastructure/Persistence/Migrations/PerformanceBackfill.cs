@@ -1,13 +1,20 @@
 namespace TicketingPlatform.Infrastructure.Persistence.Migrations;
 
 /// <summary>
-/// The Phase A slice 3 data backfill, kept as constants so the migration and its test execute the
-/// EXACT same statements. A data migration that is only exercised the one time it runs in
-/// production is the least-tested code in a codebase; this makes it assertable.
+/// The Phase A slice 3 data backfill: every existing event becomes a one-night run carrying its own
+/// Events."StartsAt", and its ticket types point at that performance. Run twice - once by the expand
+/// step, once by the contract step immediately before making the column NOT NULL, which is safe only
+/// because the statements are idempotent by construction.
 ///
-/// Every existing event becomes a one-night run: one performance carrying the event's own StartsAt,
-/// and its ticket types point at that performance. Nothing reads the new column yet - this is the
-/// expand step, so the shape exists and is populated while every query still goes through EventId.
+/// HISTORICAL. These target the PRE-CONTRACT schema: Events."StartsAt" no longer exists, so they can
+/// only ever run inside the two migrations that precede the column being dropped. They are kept as
+/// constants because those migrations must keep executing exactly this text on any database being
+/// built up from scratch - do not "fix" them to match the current schema, and do not add callers.
+///
+/// They were extracted here so a test could execute the exact same statements a migration does - a
+/// data migration exercised only the one time it runs in production is the least-tested code in a
+/// codebase. Those tests retired with the column: once the old shape cannot be inserted, the legacy
+/// scenario cannot be set up. That is the trade a contract step makes.
 /// </summary>
 public static class PerformanceBackfill
 {

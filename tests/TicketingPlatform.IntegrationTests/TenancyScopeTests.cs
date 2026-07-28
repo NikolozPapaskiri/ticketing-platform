@@ -143,8 +143,7 @@ public class TenancyScopeTests
             Id = eventId,
             TenantId = tenantId,
             Name = "Draft show",
-            VenueName = "QA Hall",
-            StartsAt = DateTimeOffset.UtcNow.AddDays(30)   // Draft is the default: never published
+            VenueName = "QA Hall"   // Draft is the default: never published
         });
         await db.SaveChangesAsync();
 
@@ -162,11 +161,20 @@ public class TenancyScopeTests
             Id = eventId,
             TenantId = tenantId,
             Name = "Scoped show",
-            VenueName = "QA Hall",
-            StartsAt = DateTimeOffset.UtcNow.AddDays(30)
+            VenueName = "QA Hall"
         };
         onSale.TransitionTo(EventStatus.OnSale); // Status is state-machine guarded, not settable
         db.Events.Add(onSale);
+
+        var performanceId = Guid.NewGuid();
+        db.Performances.Add(new Performance
+        {
+            Id = performanceId,
+            TenantId = tenantId,
+            EventId = eventId,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(30),
+            CreatedAt = DateTimeOffset.UtcNow
+        });
 
         var ticketTypeId = Guid.NewGuid();
         db.TicketTypes.Add(new TicketType
@@ -174,6 +182,7 @@ public class TenancyScopeTests
             Id = ticketTypeId,
             TenantId = tenantId,
             EventId = eventId,
+            PerformanceId = performanceId, // required since the contract step: a price is per date
             Name = "General Admission",
             Price = 25m,
             Currency = "USD"

@@ -55,6 +55,14 @@ function asApiDate(localDateTime: string) {
   return Number.isNaN(parsed.getTime()) ? localDateTime : parsed.toISOString();
 }
 
+/**
+ * The staff API returns the event's earliest date still scheduled, which is null when nothing is:
+ * dates not announced, or every night called off. The date input simply shows empty for that.
+ */
+function asFormDate(startsAt: string | null) {
+  return startsAt ? new Date(startsAt).toISOString().slice(0, 16) : "";
+}
+
 function errorText(error: unknown) {
   return error instanceof ApiClientError ? error.message : error instanceof Error ? error.message : "Request failed.";
 }
@@ -108,7 +116,7 @@ export function OrganizerDashboard() {
         name: created.name,
         description: created.description ?? "",
         venueName: created.venueName ?? "",
-        startsAt: new Date(created.startsAt).toISOString().slice(0, 16),
+        startsAt: asFormDate(created.startsAt),
         category: created.category ?? "Other",
         waitingRoomEnabled: created.waitingRoomEnabled
       });
@@ -124,7 +132,7 @@ export function OrganizerDashboard() {
         name: updated.name,
         description: updated.description ?? "",
         venueName: updated.venueName ?? "",
-        startsAt: new Date(updated.startsAt).toISOString().slice(0, 16),
+        startsAt: asFormDate(updated.startsAt),
         category: updated.category ?? "Other",
         waitingRoomEnabled: updated.waitingRoomEnabled
       });
@@ -187,7 +195,7 @@ export function OrganizerDashboard() {
         name: item.name,
         description: "",
         venueName: item.venueName ?? "",
-        startsAt: new Date(item.startsAt).toISOString().slice(0, 16),
+        startsAt: asFormDate(item.startsAt),
         category: "Other", // list items carry no category; the detail fetch below corrects it
         waitingRoomEnabled: false
       });
@@ -202,7 +210,7 @@ export function OrganizerDashboard() {
       name: eventDetail.name,
       description: eventDetail.description ?? "",
       venueName: eventDetail.venueName ?? "",
-      startsAt: new Date(eventDetail.startsAt).toISOString().slice(0, 16),
+      startsAt: asFormDate(eventDetail.startsAt),
       category: eventDetail.category ?? "Other",
       waitingRoomEnabled: eventDetail.waitingRoomEnabled
     });
@@ -239,7 +247,7 @@ export function OrganizerDashboard() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium">{event.name}</div>
-                      <div className="text-sm text-muted-foreground">{new Date(event.startsAt).toLocaleString()}</div>
+                      <div className="text-sm text-muted-foreground">{event.startsAt ? new Date(event.startsAt).toLocaleString() : "No dates scheduled"}</div>
                     </div>
                     <Badge variant={event.status === "OnSale" ? "default" : event.status === "Closed" ? "secondary" : "danger"}>
                       {event.status}

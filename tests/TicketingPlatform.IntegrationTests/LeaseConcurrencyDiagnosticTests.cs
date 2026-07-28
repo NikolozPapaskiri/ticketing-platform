@@ -60,8 +60,17 @@ public class LeaseConcurrencyDiagnosticTests
             Id = eventId,
             TenantId = tenantId,
             Name = "Lease diagnostic",
-            VenueName = "QA Hall",
-            StartsAt = DateTimeOffset.UtcNow.AddDays(30)
+            VenueName = "QA Hall"
+        });
+
+        var performanceId = Guid.NewGuid();
+        db.Performances.Add(new Performance
+        {
+            Id = performanceId,
+            TenantId = tenantId,
+            EventId = eventId,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(30),
+            CreatedAt = DateTimeOffset.UtcNow
         });
 
         var ticketTypeId = Guid.NewGuid();
@@ -70,6 +79,7 @@ public class LeaseConcurrencyDiagnosticTests
             Id = ticketTypeId,
             TenantId = tenantId,
             EventId = eventId,
+            PerformanceId = performanceId, // required since the contract step: a price is per date
             Name = "General Admission",
             Price = 25m,
             Currency = "USD"
