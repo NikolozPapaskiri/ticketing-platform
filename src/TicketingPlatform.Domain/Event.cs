@@ -31,6 +31,13 @@ public class Event
 
     public ICollection<TicketType> TicketTypes { get; set; } = new List<TicketType>();
 
+    /// <summary>
+    /// The dates this production plays. Empty today: StartsAt above still drives the current GA
+    /// path, and the follow-on slice backfills one performance per event before moving ticket
+    /// types onto them. See Performance for why the show and the date are separate things.
+    /// </summary>
+    public ICollection<Performance> Performances { get; set; } = new List<Performance>();
+
     public EventStatus Status { get; private set; } = EventStatus.Draft;
 
     // The single reviewable "what's allowed" table.
