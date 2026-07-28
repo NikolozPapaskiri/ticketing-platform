@@ -136,6 +136,14 @@ Ordered by value. Each phase is independently shippable and independently demo-a
 
 ### Phase A — Venue, performance, reserved seating — *the highest-value expansion*
 
+**Slice 1 of 4 DONE** (`feature/phase-a-venue-geometry`): `Venue`, `Hall`, and immutably-versioned
+seat maps (`SeatMapVersion` / `Section` / `SeatRow` / `Seat`), tenant-scoped like every other
+operational entity, with seat-number-unique-per-row and version-unique-per-hall enforced in the
+database. Additive only - nothing references them yet, so current behaviour is untouched. Migration
+`AddVenueGeometry`. Remaining slices, in order: **(2)** the `Event`/`Performance` split, **(3)**
+`PriceZone` + `Allocation`, **(4)** `SeatHold` with the partial unique index on
+`(performanceId, seatId)`. Slice 2 is the one that touches existing tables and the read model.
+
 The current model is `Event → TicketType → Inventory`: a flat capacity counter, with `VenueName`
 as a free-text string on `Event`. That is general admission only, and it cannot express what most
 real ticketing is: a hall with a fixed geometry, sold repeatedly across dates at different prices.
