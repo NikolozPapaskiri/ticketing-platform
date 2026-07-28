@@ -26,6 +26,16 @@ public class TicketType
     public Guid? PerformanceId { get; set; }
     public Performance? Performance { get; set; }
 
+    /// <summary>
+    /// The date a ticket of this type admits you to. Unlike <see cref="Event.HeadlineDate"/>, which
+    /// summarises a whole run for a listing, this is a single specific night: printing anything else
+    /// on a ticket is the difference between being let in and being turned away at the door.
+    ///
+    /// Falls back to the legacy column for types with no date yet; the contract step removes that.
+    /// Requires Performance and Event to be loaded.
+    /// </summary>
+    public DateTimeOffset AdmissionDate => Performance?.StartsAt ?? Event.StartsAt;
+
     public required string Name { get; set; }
     public decimal Price { get; set; }
     public required string Currency { get; set; }

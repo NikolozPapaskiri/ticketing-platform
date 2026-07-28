@@ -119,6 +119,7 @@ public sealed class TicketIssuerConsumer : BackgroundService
         // Re-read the full graph from the source of truth (background scope: no tenant).
         var order = await system.Of<Order>()
             .Include(o => o.Hold).ThenInclude(h => h.TicketType).ThenInclude(tt => tt.Event)
+            .Include(o => o.Hold).ThenInclude(h => h.TicketType).ThenInclude(tt => tt.Performance)
             .AsNoTracking()
             .FirstOrDefaultAsync(o => o.Id == orderId, ct);
         if (order is null)
@@ -130,7 +131,10 @@ public sealed class TicketIssuerConsumer : BackgroundService
             order.Id,
             order.Hold.TicketType.Event.Name,
             order.Hold.TicketType.Event.VenueName,
-            order.Hold.TicketType.Event.StartsAt,
+            // The date printed is the date the ticket admits you to - the performance's, never a
+            // summary of the run's. Both navigations are Included above; the rule itself lives on
+            // TicketType so it can be reasoned about (and tested) without a broker.
+            order.Hold.TicketType.AdmissionDate,
             order.Hold.TicketType.Name,
             order.Hold.Quantity,
             order.CustomerEmail,
