@@ -16,6 +16,18 @@ public sealed class EventRepository : IEventRepository
         _public = publicScope;
     }
 
+    // --- The event's headline date.
+    //
+    // The date lives on Performance now. The API still shows ONE date per event, so every query
+    // here reads "the earliest date still scheduled" - a correlated subquery over Performances,
+    // falling back to the legacy Event.StartsAt for rows that have no date row yet. Cancelled dates
+    // are excluded: an event must never advertise a night it has called off.
+    //
+    // It is written out at each use because EF has to translate it, and a shared C# helper would
+    // not be translatable. Event.HeadlineDate is the in-memory twin used after an Include; the two
+    // must be kept in step. The contract step deletes both fallbacks together, at which point this
+    // becomes a plain subquery with no COALESCE.
+
     // Composable IQueryable: the optional status Where only joins the expression tree when a
     // filter is present; the tenant query filter is always baked in. Nothing executes until
     // Count/ToList. (e.Status == enum translates to SQL via HasConversion<string>().)
@@ -31,10 +43,14 @@ public sealed class EventRepository : IEventRepository
         Filtered(status).CountAsync(ct);
 
     public async Task<IReadOnlyList<Event>> ListPageAsync(EventStatus? status, int page, int pageSize, CancellationToken ct) =>
-        // Stable order needs the Id tiebreaker: offset paging over a non-unique key (StartsAt)
+        // Stable order needs the Id tiebreaker: offset paging over a non-unique key (the date)
         // is non-deterministic — two events at the same instant could swap between pages.
+        // Performances are loaded because the caller reads Event.HeadlineDate off them.
         await Filtered(status)
-            .OrderBy(e => e.StartsAt)
+            .Include(e => e.Performances)
+            .OrderBy(e => e.Performances
+                .Where(p => p.Status == PerformanceStatus.Scheduled)
+                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt)
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -45,6 +61,7 @@ public sealed class EventRepository : IEventRepository
             .AsNoTracking()
             .Include(e => e.TicketTypes)
                 .ThenInclude(tt => tt.Inventory)
+            .Include(e => e.Performances)
             .FirstOrDefaultAsync(e => e.Id == id, ct);
 
     public Task<Event?> GetForUpdateAsync(Guid id, CancellationToken ct) =>
@@ -70,11 +87,16 @@ public sealed class EventRepository : IEventRepository
         await _public.OnSaleEvents()
             .AsNoTracking()
             .Where(e => e.TenantId == tenantId)
-            .OrderBy(e => e.StartsAt)
+            .OrderBy(e => e.Performances
+                .Where(p => p.Status == PerformanceStatus.Scheduled)
+                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt)
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(e => new PublicEventRow(e.Id, e.Name, e.VenueName, e.StartsAt))
+            .Select(e => new PublicEventRow(e.Id, e.Name, e.VenueName,
+                e.Performances
+                    .Where(p => p.Status == PerformanceStatus.Scheduled)
+                    .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt))
             .ToListAsync(ct);
 
     public Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct) =>
@@ -86,7 +108,11 @@ public sealed class EventRepository : IEventRepository
             .AsNoTracking()
             .Where(e => e.Id == eventId && e.TenantId == tenantId)
             .Select(e => new PublicEventDetail(
-                e.Id, e.Name, e.Description, e.VenueName, e.StartsAt, e.WaitingRoomEnabled,
+                e.Id, e.Name, e.Description, e.VenueName,
+                e.Performances
+                    .Where(p => p.Status == PerformanceStatus.Scheduled)
+                    .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt,
+                e.WaitingRoomEnabled,
                 e.TicketTypes.Select(tt => new PublicTicketTypeRow(
                     tt.Id, tt.Name, tt.Price, tt.Currency,
                     tt.Inventory.TotalQuantity, tt.Inventory.AvailableQuantity)).ToList()))
@@ -102,10 +128,17 @@ public sealed class EventRepository : IEventRepository
 
         if (category is not null)
             events = events.Where(e => e.Category == category);
+        // Date filters run against the headline date, which keeps single-date semantics exactly.
+        // Matching on ANY date in range ("show me everything playing in March") is the right rule
+        // for a real run, and arrives with the catalog listing performances rather than events.
         if (from is not null)
-            events = events.Where(e => e.StartsAt >= from);
+            events = events.Where(e => (e.Performances
+                .Where(p => p.Status == PerformanceStatus.Scheduled)
+                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt) >= from);
         if (to is not null)
-            events = events.Where(e => e.StartsAt <= to);
+            events = events.Where(e => (e.Performances
+                .Where(p => p.Status == PerformanceStatus.Scheduled)
+                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt) <= to);
         if (!string.IsNullOrWhiteSpace(query))
             // ILike = Postgres case-insensitive LIKE; provider-specific SQL belongs HERE,
             // behind the port, which is the whole argument for the repository layer.
@@ -126,7 +159,9 @@ public sealed class EventRepository : IEventRepository
         DateTimeOffset? from, DateTimeOffset? to, string? query, Guid? tenantId, int page, int pageSize,
         CancellationToken ct) =>
         await MarketplaceQuery(category, from, to, query, tenantId)
-            .OrderBy(e => e.StartsAt)
+            .OrderBy(e => e.Performances
+                .Where(p => p.Status == PerformanceStatus.Scheduled)
+                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt)
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -139,7 +174,9 @@ public sealed class EventRepository : IEventRepository
                     e.Id,
                     e.Name,
                     e.VenueName,
-                    e.StartsAt,
+                    e.Performances
+                        .Where(p => p.Status == PerformanceStatus.Scheduled)
+                        .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt,
                     e.Category,
                     e.ImagePath,
                     t.Name,
@@ -155,7 +192,11 @@ public sealed class EventRepository : IEventRepository
             .AsNoTracking()
             .Where(e => e.Id == eventId)
             .Join(_db.Tenants, e => e.TenantId, t => t.Id, (e, t) => new MarketplaceEventDetail(
-                e.Id, e.Name, e.Description, e.VenueName, e.StartsAt, e.Category,
+                e.Id, e.Name, e.Description, e.VenueName,
+                e.Performances
+                    .Where(p => p.Status == PerformanceStatus.Scheduled)
+                    .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt,
+                e.Category,
                 t.Name, t.Slug, e.ImagePath != null, e.WaitingRoomEnabled,
                 e.TicketTypes.Select(tt => new PublicTicketTypeRow(
                     tt.Id, tt.Name, tt.Price, tt.Currency,

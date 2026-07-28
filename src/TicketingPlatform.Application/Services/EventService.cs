@@ -55,7 +55,7 @@ public sealed class EventService
 
         // Status.ToString() happens here, in memory — it is not reliably translatable in SQL.
         var items = events
-            .Select(e => new EventListItemResponse(e.Id, e.Name, e.VenueName, e.StartsAt, e.Status.ToString()))
+            .Select(e => new EventListItemResponse(e.Id, e.Name, e.VenueName, e.HeadlineDate, e.Status.ToString()))
             .ToList();
 
         var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
