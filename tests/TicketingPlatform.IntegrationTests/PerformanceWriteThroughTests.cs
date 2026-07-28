@@ -56,6 +56,31 @@ public class PerformanceWriteThroughTests
     }
 
     [Fact]
+    public async Task ATicketTypeWithNoDate_IsRejectedByTheDatabase()
+    {
+        var (tenant, staff) = await _client.CreateTenantWithStaffAsync();
+        var ev = await _client.CreateEventAsync(staff);
+
+        using var scope = TenantScope(tenant.Id);
+        var db = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
+        db.TicketTypes.Add(new TicketType
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            EventId = ev.Id,
+            Name = "Dateless",
+            Price = 10m,
+            Currency = "USD"
+            // PerformanceId left unset - the pre-contract shape.
+        });
+
+        // The point of the contract step: the invariant is the schema's job, not a convention every
+        // future write path has to remember. Guid.Empty names no performance, so the foreign key
+        // rejects it - a ticket type that belongs to no date cannot be written at all.
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+    }
+
+    [Fact]
     public async Task MovingTheEventsDate_MovesThePerformance_RatherThanLeavingItBehind()
     {
         var (tenant, staff) = await _client.CreateTenantWithStaffAsync();

@@ -9,12 +9,11 @@ namespace TicketingPlatform.UnitTests.Domain;
 /// </summary>
 public class EventDateSelectionTests
 {
-    private static Event AnEvent(DateTimeOffset legacyStartsAt) => new()
+    private static Event AnEvent() => new()
     {
         Id = Guid.NewGuid(),
         TenantId = Guid.NewGuid(),
         Name = "Run of the play",
-        StartsAt = legacyStartsAt,
         CreatedAt = DateTimeOffset.UtcNow
     };
 
@@ -36,7 +35,7 @@ public class EventDateSelectionTests
     public void TheHeadlineDate_IsTheEarliestNight()
     {
         var now = DateTimeOffset.UtcNow;
-        var ev = AnEvent(now.AddYears(5)); // legacy column deliberately wrong
+        var ev = AnEvent();
         ANight(ev, now.AddDays(20));
         ANight(ev, now.AddDays(10));
         ANight(ev, now.AddDays(30));
@@ -49,7 +48,7 @@ public class EventDateSelectionTests
     public void ACancelledNight_IsNeverTheHeadlineDate()
     {
         var now = DateTimeOffset.UtcNow;
-        var ev = AnEvent(now.AddYears(5));
+        var ev = AnEvent();
         var opening = ANight(ev, now.AddDays(10));
         ANight(ev, now.AddDays(11));
 
@@ -60,20 +59,32 @@ public class EventDateSelectionTests
     }
 
     [Fact]
-    public void AnEventWithNoNightsYet_FallsBackToTheLegacyColumn()
+    public void AnEventWithNoNightsScheduled_HasNoDate()
     {
-        var startsAt = DateTimeOffset.UtcNow.AddDays(3);
-        var ev = AnEvent(startsAt);
+        var ev = AnEvent();
 
-        // What makes the migrate step releasable: rows the backfill has not reached still answer.
-        Assert.Equal(startsAt, ev.HeadlineDate);
+        // Null is the honest answer for a show whose dates are not set, and for a run whose every
+        // night has been called off. The dropped column could only ever invent one.
+        Assert.Null(ev.HeadlineDate);
+    }
+
+    [Fact]
+    public void AnEventWhoseEveryNightIsCancelled_HasNoDate()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var ev = AnEvent();
+        var only = ANight(ev, now.AddDays(10));
+
+        only.Cancel(now);
+
+        Assert.Null(ev.HeadlineDate);
     }
 
     [Fact]
     public void ATicketsAdmissionDate_IsItsOwnNight_NotTheRunsOpening()
     {
         var now = DateTimeOffset.UtcNow;
-        var ev = AnEvent(now.AddDays(10));
+        var ev = AnEvent();
         ANight(ev, now.AddDays(10));
         var closingNight = ANight(ev, now.AddDays(30));
 

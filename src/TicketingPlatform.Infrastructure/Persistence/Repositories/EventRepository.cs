@@ -18,15 +18,18 @@ public sealed class EventRepository : IEventRepository
 
     // --- The event's headline date.
     //
-    // The date lives on Performance now. The API still shows ONE date per event, so every query
-    // here reads "the earliest date still scheduled" - a correlated subquery over Performances,
-    // falling back to the legacy Event.StartsAt for rows that have no date row yet. Cancelled dates
+    // The date lives on Performance. The API shows ONE date per event, so every query here reads
+    // "the earliest date still scheduled" - a correlated subquery over Performances. Cancelled dates
     // are excluded: an event must never advertise a night it has called off.
     //
-    // It is written out at each use because EF has to translate it, and a shared C# helper would
-    // not be translatable. Event.HeadlineDate is the in-memory twin used after an Include; the two
-    // must be kept in step. The contract step deletes both fallbacks together, at which point this
-    // becomes a plain subquery with no COALESCE.
+    // The BUYER-facing queries read it non-nullable, which is safe only because PublicScope filters
+    // to events that have a scheduled date; without that guard an empty MIN() would be SQL NULL with
+    // nowhere to go. The STAFF list keeps it nullable, because an organizer is precisely who should
+    // see an event whose dates are not set yet.
+    //
+    // It is written out at each use because EF has to translate it, and a shared C# helper would not
+    // be translatable. Event.HeadlineDate is the in-memory twin used after an Include; the two must
+    // be kept in step.
 
     // Composable IQueryable: the optional status Where only joins the expression tree when a
     // filter is present; the tenant query filter is always baked in. Nothing executes until
@@ -48,9 +51,11 @@ public sealed class EventRepository : IEventRepository
         // Performances are loaded because the caller reads Event.HeadlineDate off them.
         await Filtered(status)
             .Include(e => e.Performances)
+            // Nullable here: a staff list includes events with nothing scheduled, and Postgres sorts
+            // those NULLs last - unscheduled work sits after the dated run, which is where it belongs.
             .OrderBy(e => e.Performances
                 .Where(p => p.Status == PerformanceStatus.Scheduled)
-                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt)
+                .Min(p => (DateTimeOffset?)p.StartsAt))
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -89,14 +94,14 @@ public sealed class EventRepository : IEventRepository
             .Where(e => e.TenantId == tenantId)
             .OrderBy(e => e.Performances
                 .Where(p => p.Status == PerformanceStatus.Scheduled)
-                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt)
+                .Min(p => p.StartsAt))
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(e => new PublicEventRow(e.Id, e.Name, e.VenueName,
                 e.Performances
                     .Where(p => p.Status == PerformanceStatus.Scheduled)
-                    .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt))
+                    .Min(p => p.StartsAt)))
             .ToListAsync(ct);
 
     public Task<int> CountPublicOnSaleAsync(Guid tenantId, CancellationToken ct) =>
@@ -111,7 +116,7 @@ public sealed class EventRepository : IEventRepository
                 e.Id, e.Name, e.Description, e.VenueName,
                 e.Performances
                     .Where(p => p.Status == PerformanceStatus.Scheduled)
-                    .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt,
+                    .Min(p => p.StartsAt),
                 e.WaitingRoomEnabled,
                 e.TicketTypes.Select(tt => new PublicTicketTypeRow(
                     tt.Id, tt.Name, tt.Price, tt.Currency,
@@ -134,11 +139,11 @@ public sealed class EventRepository : IEventRepository
         if (from is not null)
             events = events.Where(e => (e.Performances
                 .Where(p => p.Status == PerformanceStatus.Scheduled)
-                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt) >= from);
+                .Min(p => p.StartsAt)) >= from);
         if (to is not null)
             events = events.Where(e => (e.Performances
                 .Where(p => p.Status == PerformanceStatus.Scheduled)
-                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt) <= to);
+                .Min(p => p.StartsAt)) <= to);
         if (!string.IsNullOrWhiteSpace(query))
             // ILike = Postgres case-insensitive LIKE; provider-specific SQL belongs HERE,
             // behind the port, which is the whole argument for the repository layer.
@@ -161,7 +166,7 @@ public sealed class EventRepository : IEventRepository
         await MarketplaceQuery(category, from, to, query, tenantId)
             .OrderBy(e => e.Performances
                 .Where(p => p.Status == PerformanceStatus.Scheduled)
-                .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt)
+                .Min(p => p.StartsAt))
             .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -176,7 +181,7 @@ public sealed class EventRepository : IEventRepository
                     e.VenueName,
                     e.Performances
                         .Where(p => p.Status == PerformanceStatus.Scheduled)
-                        .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt,
+                        .Min(p => p.StartsAt),
                     e.Category,
                     e.ImagePath,
                     t.Name,
@@ -195,7 +200,7 @@ public sealed class EventRepository : IEventRepository
                 e.Id, e.Name, e.Description, e.VenueName,
                 e.Performances
                     .Where(p => p.Status == PerformanceStatus.Scheduled)
-                    .Min(p => (DateTimeOffset?)p.StartsAt) ?? e.StartsAt,
+                    .Min(p => p.StartsAt),
                 e.Category,
                 t.Name, t.Slug, e.ImagePath != null, e.WaitingRoomEnabled,
                 e.TicketTypes.Select(tt => new PublicTicketTypeRow(

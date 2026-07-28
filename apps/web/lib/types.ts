@@ -19,7 +19,14 @@ export type PublicEventListItem = {
   startsAt: string;
 };
 
-export type EventListItem = PublicEventListItem & {
+/**
+ * Staff-facing shapes carry a NULLABLE startsAt: it is the event's earliest date still scheduled,
+ * and null means nothing is scheduled - dates not announced, or every night called off. Organizers
+ * are exactly who needs to see that. The public shapes above keep it required, because an event
+ * with no date is never listed publicly in the first place.
+ */
+export type EventListItem = Omit<PublicEventListItem, "startsAt"> & {
+  startsAt: string | null;
   status: string;
 };
 
@@ -69,7 +76,8 @@ export type MarketplaceEventDetail = PublicEvent & {
   hasImage: boolean;
 };
 
-export type EventDetail = PublicEvent & {
+export type EventDetail = Omit<PublicEvent, "startsAt"> & {
+  startsAt: string | null;
   status: string;
   category: string;
   hasImage: boolean;

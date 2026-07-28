@@ -26,12 +26,6 @@ public class Event
     /// </summary>
     public bool WaitingRoomEnabled { get; set; }
 
-    /// <summary>
-    /// LEGACY. The date now lives on <see cref="Performance"/>; this column survives only as the
-    /// fallback for rows that have no date row yet, and the contract step deletes it. Read
-    /// <see cref="HeadlineDate"/> instead - nothing outside that property should touch this.
-    /// </summary>
-    public DateTimeOffset StartsAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<TicketType> TicketTypes { get; set; } = new List<TicketType>();
@@ -48,21 +42,19 @@ public class Event
     /// a run, not a moment, so "the" date is a summary - cancelled dates are excluded because an
     /// event should never advertise a night it has called off.
     ///
+    /// NULL means nothing is scheduled: an announced show whose dates are not set, or a run whose
+    /// every night has been called off. That is a real state rather than missing data, and saying so
+    /// is better than inventing a date - which is exactly what the dropped Event.StartsAt column did
+    /// for every event that had no schedule.
+    ///
     /// IN-MEMORY ONLY: it reads a loaded collection, so EF cannot translate it. Queries inline the
-    /// equivalent correlated subquery (see EventRepository); the two must be kept in step until the
-    /// contract step deletes the fallback below.
+    /// equivalent correlated subquery (see EventRepository); the two must be kept in step.
     /// </summary>
-    public DateTimeOffset HeadlineDate
-    {
-        get
-        {
-            var scheduled = Performances
-                .Where(p => p.Status == PerformanceStatus.Scheduled)
-                .Select(p => (DateTimeOffset?)p.StartsAt)
-                .Min();
-            return scheduled ?? StartsAt;
-        }
-    }
+    public DateTimeOffset? HeadlineDate =>
+        Performances
+            .Where(p => p.Status == PerformanceStatus.Scheduled)
+            .Select(p => (DateTimeOffset?)p.StartsAt)
+            .Min();
 
     public EventStatus Status { get; private set; } = EventStatus.Draft;
 
@@ -77,12 +69,15 @@ public class Event
     public bool CanTransitionTo(EventStatus target) =>
         AllowedTransitions.TryGetValue(Status, out var allowed) && allowed.Contains(target);
 
-    public void UpdateDetails(string name, string? description, string? venueName, DateTimeOffset startsAt, EventCategory category)
+    /// <summary>
+    /// Details only. The date is not one of them any more - it belongs to a <see cref="Performance"/>,
+    /// and moving it is scheduling, not editing.
+    /// </summary>
+    public void UpdateDetails(string name, string? description, string? venueName, EventCategory category)
     {
         Name = name;
         Description = description;
         VenueName = venueName;
-        StartsAt = startsAt;
         Category = category;
     }
 

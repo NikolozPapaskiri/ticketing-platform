@@ -8,13 +8,17 @@ public record TenantResponse(Guid Id, string Name, string Slug);
 // JSON contract stays plain strings without a global enum-converter dependency.
 public record CreateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null, bool? WaitingRoomEnabled = null);
 public record UpdateEventRequest(string Name, string? Description, string? VenueName, DateTimeOffset StartsAt, string? Category = null, bool? WaitingRoomEnabled = null);
-public record EventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset StartsAt, string Status);
+// StartsAt is NULLABLE on the two staff-facing shapes below: it is the event's earliest date still
+// scheduled, and null means nothing is scheduled - dates not announced, or every night called off.
+// An organizer is exactly who needs to see that state. The buyer-facing shapes keep it required,
+// because an event with no date is not publicly listed at all (see PublicScope.OnSaleEvents).
+public record EventListItemResponse(Guid Id, string Name, string? VenueName, DateTimeOffset? StartsAt, string Status);
 public record EventResponse(
     Guid Id,
     string Name,
     string? Description,
     string? VenueName,
-    DateTimeOffset StartsAt,
+    DateTimeOffset? StartsAt,
     string Status,
     string Category,
     bool HasImage,

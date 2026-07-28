@@ -70,8 +70,10 @@ public class TicketingDbContext : DbContext
             b.Property(e => e.Category).HasConversion<string>().HasMaxLength(20);
             b.Property(e => e.ImagePath).HasMaxLength(500);
             b.HasIndex(e => e.TenantId);
-            // The marketplace catalog's scan path: OnSale + category + date ordering.
-            b.HasIndex(e => new { e.Status, e.Category, e.StartsAt });
+            // The marketplace catalog's scan path. The date left this table with the contract step,
+            // so ordering is served by Performances' (EventId, StartsAt) index instead; what remains
+            // here is the visibility-and-category filter that narrows the set first.
+            b.HasIndex(e => new { e.Status, e.Category });
             b.HasMany(e => e.TicketTypes)
                 .WithOne(tt => tt.Event)
                 .HasForeignKey(tt => tt.EventId)

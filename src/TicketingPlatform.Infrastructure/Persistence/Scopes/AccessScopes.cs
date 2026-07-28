@@ -92,9 +92,19 @@ public sealed class PublicScope
     private readonly TicketingDbContext _db;
     public PublicScope(TicketingDbContext db) => _db = db;
 
-    /// <summary>Publicly visible events. The OnSale predicate is baked in so it cannot be forgotten.</summary>
+    /// <summary>
+    /// Publicly visible events: on sale AND actually playing. Both predicates are baked in so they
+    /// cannot be forgotten.
+    ///
+    /// The schedule half arrived with the contract step. An event with no date still scheduled -
+    /// dates not announced, or every night called off - cannot be sold, because a ticket type
+    /// requires a performance; listing it would advertise something no one can buy. It also means
+    /// the buyer-facing projections can read the earliest date without a null to answer for.
+    /// </summary>
     public IQueryable<Event> OnSaleEvents() =>
-        _db.Events.IgnoreQueryFilters().Where(e => e.Status == EventStatus.OnSale);
+        _db.Events.IgnoreQueryFilters()
+            .Where(e => e.Status == EventStatus.OnSale)
+            .Where(e => e.Performances.Any(p => p.Status == PerformanceStatus.Scheduled));
 
     /// <summary>
     /// Events by id REGARDLESS of published state. Deliberately named to be uncomfortable: it is

@@ -60,8 +60,7 @@ public class LeaseConcurrencyDiagnosticTests
             Id = eventId,
             TenantId = tenantId,
             Name = "Lease diagnostic",
-            VenueName = "QA Hall",
-            StartsAt = DateTimeOffset.UtcNow.AddDays(30)
+            VenueName = "QA Hall"
         });
 
         var performanceId = Guid.NewGuid();

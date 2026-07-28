@@ -64,10 +64,11 @@ public class PerformanceScheduleTests
     }
 
     [Fact]
-    public async Task TheExistingGeneralAdmissionPathIsUntouched()
+    public async Task AnEventWithNothingScheduled_HasNoDate_RatherThanAnInventedOne()
     {
-        // The split is additive: an event with ticket types and no performances still behaves
-        // exactly as before, which is what keeps this slice releasable on its own.
+        // This test used to assert the opposite: that an event with no performances still had a
+        // working Event.StartsAt. That was the transitional guarantee, and the contract step is
+        // exactly what retires it. A show with no dates set now says so.
         var (tenantId, eventId) = await SeedRunAsync(nights: 0);
 
         using var scope = _factory.Services.CreateScope();
@@ -76,7 +77,7 @@ public class PerformanceScheduleTests
 
         var run = await db.Events.Include(e => e.Performances).FirstAsync(e => e.Id == eventId);
         Assert.Empty(run.Performances);
-        Assert.True(run.StartsAt > DateTimeOffset.UtcNow); // Event.StartsAt still drives GA today
+        Assert.Null(run.HeadlineDate);
     }
 
     private async Task<(Guid TenantId, Guid EventId)> SeedRunAsync(int nights, bool withGeometry = false)
@@ -93,8 +94,7 @@ public class PerformanceScheduleTests
             Id = Guid.NewGuid(),
             TenantId = tenantId,
             Name = "Hamlet",
-            VenueName = "Rustaveli Theatre",
-            StartsAt = now.AddDays(30)
+            VenueName = "Rustaveli Theatre"
         };
         db.Events.Add(run);
 
