@@ -93,7 +93,10 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes public images; this is Chainguard's maintained MinIO build
+    # (drop-in, runs as non-root). Digest-pinned because its free tier only ships `latest`.
+    # Keep in sync with k8s/minio.yaml and S3FileStorageTests.
+    image: cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
     container_name: ticketing-minio
     command: server /data --console-address ":9001"
     environment:
