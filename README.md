@@ -7,8 +7,9 @@ under load, in real time, for many tenants at once.
 
 This is a deliberately staged build (naive -> layered -> event-driven -> production). Each stage is
 tagged so the progression is reviewable: `v1-naive`, `v2-clean`, `v2-eventdriven`, and
-`v3-production`. The full plan and current status live in [CLAUDE.md](CLAUDE.md); Codex-facing
-handoff notes are mirrored in [AGENTS.md](AGENTS.md).
+`v3-production`. The build plan is in [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md), what was built in
+[docs/BUILD_HISTORY.md](docs/BUILD_HISTORY.md), and what is next in [docs/ROADMAP.md](docs/ROADMAP.md).
+Agent context lives in [CLAUDE.md](CLAUDE.md) and, for Codex, [AGENTS.md](AGENTS.md).
 
 ## The product
 
