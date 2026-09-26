@@ -21,6 +21,11 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # WireMock.Net >= 2.14 pulls Microsoft.OpenApi 3.x (via OpenApiParser -> RamlToOpenApiConverter),
+      # which overrides the 2.x that Microsoft.AspNetCore.OpenApi 10 requires; the OpenAPI source
+      # generator then fails to compile in the integration tests. Revisit with ASP.NET Core 11.
+      - dependency-name: "WireMock.Net"
+        versions: [">= 2.14.0"]
 
   - package-ecosystem: npm
     directory: "/apps/web"
