@@ -19,15 +19,17 @@ public sealed class S3FileStorageTests : IAsyncLifetime
     private const string Password = "minioadmin";
     private const string Bucket = "ticketing-files";
 
-    // The parameterless builder pins the module's tested default MinIO image (guaranteed pullable);
-    // pinning an arbitrary RELEASE.* tag here would risk an unavailable image. Suppress the
-    // deprecation locally rather than gamble on a hand-picked tag.
-#pragma warning disable CS0618
-    private readonly MinioContainer _minio = new MinioBuilder()
+    // MinIO stopped publishing public images (minio/minio and quay.io/minio/minio no longer pull),
+    // which broke the module's default image. Chainguard's maintained MinIO fork is a drop-in:
+    // same binary, env vars, and health endpoints. Its free tier only publishes a moving `latest`,
+    // so the digest pins what CI runs; keep it in sync with docker-compose.yml and k8s/minio.yaml.
+    private const string MinioImage =
+        "cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1";
+
+    private readonly MinioContainer _minio = new MinioBuilder(MinioImage)
         .WithUsername(User)
         .WithPassword(Password)
         .Build();
-#pragma warning restore CS0618
 
     private IAmazonS3 _s3 = null!;
     private IFileStorage _storage = null!;
